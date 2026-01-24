@@ -43,6 +43,12 @@ app.post("/flow", (req, res) => {
       initial_vector
     } = req.body;
 
+    // ✅ Validate incoming data
+    if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
+      console.error("Missing required fields:", req.body);
+      return res.status(400).send("Missing required encrypted fields");
+    }
+
     // 1️⃣ Decrypt AES key using RSA
     const aesKey = crypto.privateDecrypt(
       {
