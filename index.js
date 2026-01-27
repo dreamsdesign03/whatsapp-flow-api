@@ -40,10 +40,17 @@ app.post("/flow", (req, res) => {
       return res.sendStatus(401);
     }
 
-    // Verify signature
+    if (!req.rawBody) {
+      console.error("❌ Missing raw body");
+      return res.sendStatus(400);
+    }
+
     const expected =
       "sha256=" +
-      crypto.createHmac("sha256", APP_SECRET).update(req.rawBody).digest("hex");
+      crypto
+        .createHmac("sha256", APP_SECRET)
+        .update(req.rawBody)
+        .digest("hex");
 
     if (
       signature.length !== expected.length ||
@@ -53,8 +60,12 @@ app.post("/flow", (req, res) => {
       return res.sendStatus(401);
     }
 
-    // Decrypt payload
-    const encryptedData = req.body.encrypted_flow_data;
+    // ✅ IMPORTANT: Meta test calls don't send encrypted payload
+    if (!req.body.encrypted_flow_data) {
+      console.log("ℹ️ Meta test call – no encrypted data");
+      return res.status(200).json({ screen: "SUCCESS" });
+    }
+
     const encryptedKey = Buffer.from(req.body.encrypted_aes_key, "base64");
     const iv = Buffer.from(req.body.initial_vector, "base64");
 
@@ -69,7 +80,11 @@ app.post("/flow", (req, res) => {
     const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, iv);
     decipher.setAuthTag(Buffer.from(req.body.auth_tag, "base64"));
 
-    let decrypted = decipher.update(encryptedData, "base64", "utf8");
+    let decrypted = decipher.update(
+      req.body.encrypted_flow_data,
+      "base64",
+      "utf8"
+    );
     decrypted += decipher.final("utf8");
 
     const flowData = JSON.parse(decrypted);
@@ -77,12 +92,10 @@ app.post("/flow", (req, res) => {
 
     return res.status(200).json({
       screen: "SUCCESS",
-      data: {
-        message: "Flow received successfully",
-      },
+      data: { message: "Flow received successfully" },
     });
   } catch (err) {
-    console.error("❌ Flow error:", err);
+    console.error("❌ Flow error:", err.message);
     return res.sendStatus(500);
   }
 });
