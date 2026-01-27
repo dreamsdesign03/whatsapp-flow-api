@@ -2,11 +2,11 @@ import express from "express";
 import crypto from "crypto";
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "5mb" }));
 
-// 🔑 PRIVATE KEY (Meta public key nu pair)
+// 🔐 PRIVATE KEY (same pair as uploaded public key)
 const PRIVATE_KEY = `
------BEGIN RSA PRIVATE KEY-----
+-----BEGIN PRIVATE KEY-----
 MIIEpAIBAAKCAQEAme5LB3I4yh0u5mFdnNbXFMAPJAiUQ7pMSGG221TNVUqO8BFZ
 2pgVYu3kFYJupLGp8YTnXlzblumrkh2R5pKju/zs7r0EUtRRNKOT3jAaWlbEF3Fa
 1pcTcFtMPAhQpl6r1cMJqzYBo1yZGJbFFciLEtuMELufBvgz4QaZ0/Wi19lIf2A5
@@ -32,8 +32,30 @@ hV9/7v7iqTgdzC/Fz4oQOxfxhIvcm6NoUnjPGNA85vqY/JgwzI40LXvfZyTDMz6G
 Db78AQKBgQDOC7zQiAvrw+zVNkFFNMpQFpjQIUpc0n0Wv6cdeo2xwILo5Z8gsNdr
 A+svLf9KTGPxRy9leM46+VZrBUem8Rs9Ekdx+AKH4FQtL+Wb9Rw5mBxsYUeXLcON
 NIhFIckFtvCogiXbkBnmvpav0J/IHC8KtM95jGHYjYtyg0SIHIP3uA==
------END RSA PRIVATE KEY-----
-`.trim();
+-----END PRIVATE KEY-----
+`;
+
+function decryptAES(encryptedData, aesKey, iv) {
+  const decipher = crypto.createDecipheriv(
+    "aes-256-cbc",
+    aesKey,
+    iv
+  );
+  let decrypted = decipher.update(encryptedData, "base64", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
+function encryptAES(data, aesKey, iv) {
+  const cipher = crypto.createCipheriv(
+    "aes-256-cbc",
+    aesKey,
+    iv
+  );
+  let encrypted = cipher.update(data, "utf8", "base64");
+  encrypted += cipher.final("base64");
+  return encrypted;
+}
 
 app.post("/flow", (req, res) => {
   try {
@@ -41,74 +63,58 @@ app.post("/flow", (req, res) => {
       encrypted_flow_data,
       encrypted_aes_key,
       initial_vector,
-    } = req.body || {};
+    } = req.body;
 
-    // 🔁 1) Health / handshake / empty payload
+    // 🛑 Meta strict validation
     if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
-      console.log("ℹ️ Health check or empty payload received");
-      return res.status(200).send("");
+      return res.status(200).send("ERROR");
     }
 
-    // 🔐 2) Validate IV
-    const iv = Buffer.from(initial_vector, "base64");
-    if (iv.length !== 16) {
-      console.log("❌ Invalid IV length:", iv.length);
-      return res.status(200).send("");
-    }
-
-    // 🔓 3) Decrypt AES key using RSA private key
+    // 🔓 AES key decrypt (RSA)
     const aesKey = crypto.privateDecrypt(
       {
         key: PRIVATE_KEY,
-        padding: crypto.constants.RSA_PKCS1_PADDING,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: "sha256",
       },
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    // 🔓 4) Decrypt Flow payload
-    const decipher = crypto.createDecipheriv(
-      "aes-256-cbc",
+    const iv = Buffer.from(initial_vector, "base64");
+
+    if (iv.length !== 16) {
+      return res.status(200).send("ERROR");
+    }
+
+    // 🔓 Flow data decrypt
+    const decrypted = decryptAES(
+      encrypted_flow_data,
       aesKey,
       iv
     );
-
-    let decrypted = decipher.update(
-      encrypted_flow_data,
-      "base64",
-      "utf8"
-    );
-    decrypted += decipher.final("utf8");
 
     console.log("✅ Decrypted Flow Payload:", decrypted);
 
-    // 🔁 5) Health response → empty JSON
-    const responseJson = JSON.stringify({});
+    // 🟢 IMPORTANT:
+    // Meta expects encrypted response EVEN recall ma
+    const encryptedResponse = encryptAES("{}", aesKey, iv);
 
-    // 🔐 6) Encrypt response
-    const cipher = crypto.createCipheriv(
-      "aes-256-cbc",
-      aesKey,
-      iv
-    );
-
-    let encryptedResponse = cipher.update(
-      responseJson,
-      "utf8",
-      "base64"
-    );
-    encryptedResponse += cipher.final("base64");
-
-    // 📤 7) Send encrypted response as text
-    res.setHeader("Content-Type", "text/plain");
-    return res.status(200).send(encryptedResponse);
+    res
+      .status(200)
+      .set("Content-Type", "text/plain")
+      .send(encryptedResponse);
 
   } catch (err) {
-    console.error("🔥 Flow Error:", err);
-    return res.status(500).send("ERROR");
+    console.error("❌ Flow error:", err.message);
+    // ❗ Meta still expects 200
+    return res.status(200).send("ERROR");
   }
 });
 
-// 🚀 Server start
+app.get("/", (req, res) => {
+  res.send("Flow crypto server running");
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Flow crypto server running on port ${PORT}`);
