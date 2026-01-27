@@ -3,18 +3,12 @@ import crypto from "crypto";
 import axios from "axios";
 
 const app = express();
+app.use(express.json());
 
-// Meta signature વેરીફિકેશન માટે RAW body જોઈએ
-app.use(express.json({
-    verify: (req, res, buf) => { req.rawBody = buf; }
-}));
-
-// --- કોન્ફિગરેશન (અહીં તારા ડેટા નાખો) ---
-const APP_SECRET = "f32d7a3f9e81dad4a6698b771d36af09"; // તારો મેટા એપ સિક્રેટ
-const N8N_WEBHOOK_URL = "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64"; // તારી n8n લિંક
 const PORT = process.env.PORT || 10000;
+const N8N_WEBHOOK_URL = "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64";
 
-// તમારી આખી પ્રાઈવેટ કી અહીં ડાયરેક્ટ પેસ્ટ કરી છે
+// તમારી પ્રાઈવેટ કી (Direct Code માં)
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -44,64 +38,77 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-// Response એન્ક્રિપ્ટ કરવા માટેનું ફંક્શન
-const encryptResponse = (data, aesKey, iv) => {
-    const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
-    let encrypted = cipher.update(JSON.stringify(data), "utf8", "base64");
-    encrypted += cipher.final("base64");
-    const authTag = cipher.getAuthTag();
-    return Buffer.concat([Buffer.from(encrypted, "base64"), authTag]).toString("base64");
+// ૧. ડિક્રિપ્શન ફંક્શન
+const decryptRequest = (body, privatePem) => {
+  const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+
+  const decryptedAesKey = crypto.privateDecrypt(
+    {
+      key: crypto.createPrivateKey(privatePem),
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    },
+    Buffer.from(encrypted_aes_key, "base64"),
+  );
+
+  const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
+  const initialVectorBuffer = Buffer.from(initial_vector, "base64");
+
+  const TAG_LENGTH = 16;
+  const encrypted_flow_data_body = flowDataBuffer.subarray(0, -TAG_LENGTH);
+  const encrypted_flow_data_tag = flowDataBuffer.subarray(-TAG_LENGTH);
+
+  const decipher = crypto.createDecipheriv("aes-128-gcm", decryptedAesKey, initialVectorBuffer);
+  decipher.setAuthTag(encrypted_flow_data_tag);
+
+  const decryptedJSONString = Buffer.concat([
+    decipher.update(encrypted_flow_data_body),
+    decipher.final(),
+  ]).toString("utf-8");
+
+  return {
+    decryptedBody: JSON.parse(decryptedJSONString),
+    aesKeyBuffer: decryptedAesKey,
+    initialVectorBuffer,
+  };
 };
 
-app.get("/flow", (req, res) => res.status(200).send("OK"));
+// ૨. એન્ક્રિપ્શન ફંક્શન (Flipped IV સાથે)
+const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
+  const flipped_iv = Buffer.from(initialVectorBuffer.map((byte) => ~byte));
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKeyBuffer, flipped_iv);
+  
+  return Buffer.concat([
+    cipher.update(JSON.stringify(response), "utf-8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]).toString("base64");
+};
 
+// ૩. મેઈન રૂટ
 app.post("/flow", async (req, res) => {
-    try {
-        const signature = req.headers["x-hub-signature-256"];
-        const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(req.rawBody).digest("hex");
+  try {
+    // Health Check માટે સાદો રિસ્પોન્સ
+    if (!req.body.encrypted_flow_data) return res.status(200).send("OK");
 
-        if (!signature || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-            return res.status(401).send("Invalid Signature");
-        }
+    const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
+    console.log("✅ Decrypted Data:", decryptedBody);
 
-        if (!req.body.encrypted_flow_data) return res.status(200).send("OK");
+    // ડેટા n8n પર મોકલો
+    axios.post(N8N_WEBHOOK_URL, decryptedBody).catch((e) => console.error("n8n Error"));
 
-        const encryptedKey = Buffer.from(req.body.encrypted_aes_key, "base64");
-        const iv = Buffer.from(req.body.initial_vector, "base64");
+    // Meta ને પાછો મોકલવા માટેનો રિસ્પોન્સ
+    const screenData = {
+      version: "3.0",
+      screen: "SUCCESS",
+      data: { extension_message_response: { params: { "message": "Success" } } }
+    };
 
-        // Decrypt AES Key
-        const aesKey = crypto.privateDecrypt(
-            { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
-            encryptedKey
-        );
-
-        // Decrypt Flow Data
-        const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, iv);
-        decipher.setAuthTag(Buffer.from(req.body.auth_tag, "base64"));
-        let decrypted = decipher.update(req.body.encrypted_flow_data, "base64", "utf8");
-        decrypted += decipher.final("utf8");
-
-        const flowData = JSON.parse(decrypted);
-        console.log("✅ Decrypted Data:", flowData);
-
-        // n8n પર ડેટા મોકલો
-        axios.post(N8N_WEBHOOK_URL, flowData).catch(e => console.error("n8n Error"));
-
-        // Meta ને રિસ્પોન્સ મોકલો
-        const responseData = {
-            version: "3.0",
-            screen: "SUCCESS",
-            data: { extension_message_response: { params: { "message": "Received!" } } }
-        };
-
-        const encryptedBody = encryptResponse(responseData, aesKey, iv);
-        res.set("Content-Type", "text/plain");
-        return res.status(200).send(encryptedBody);
-
-    } catch (err) {
-        console.error("❌ Critical Error:", err.message);
-        return res.status(500).send("Internal Error");
-    }
+    res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
+  } catch (error) {
+    console.error("❌ Error:", error.message);
+    res.status(500).send("Internal Error");
+  }
 });
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`App listening on port ${PORT}!`));
