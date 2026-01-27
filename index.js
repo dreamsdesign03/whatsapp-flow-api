@@ -4,7 +4,6 @@ import crypto from "crypto";
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
-// 🔐 PRIVATE KEY (same pair as uploaded public key)
 const PRIVATE_KEY = `
 -----BEGIN PRIVATE KEY-----
 MIIEpAIBAAKCAQEAme5LB3I4yh0u5mFdnNbXFMAPJAiUQ7pMSGG221TNVUqO8BFZ
@@ -36,22 +35,14 @@ NIhFIckFtvCogiXbkBnmvpav0J/IHC8KtM95jGHYjYtyg0SIHIP3uA==
 `;
 
 function decryptAES(encryptedData, aesKey, iv) {
-  const decipher = crypto.createDecipheriv(
-    "aes-256-cbc",
-    aesKey,
-    iv
-  );
+  const decipher = crypto.createDecipheriv("aes-256-cbc", aesKey, iv);
   let decrypted = decipher.update(encryptedData, "base64", "utf8");
   decrypted += decipher.final("utf8");
   return decrypted;
 }
 
 function encryptAES(data, aesKey, iv) {
-  const cipher = crypto.createCipheriv(
-    "aes-256-cbc",
-    aesKey,
-    iv
-  );
+  const cipher = crypto.createCipheriv("aes-256-cbc", aesKey, iv);
   let encrypted = cipher.update(data, "utf8", "base64");
   encrypted += cipher.final("base64");
   return encrypted;
@@ -65,12 +56,11 @@ app.post("/flow", (req, res) => {
       initial_vector,
     } = req.body;
 
-    // 🛑 Meta strict validation
     if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
       return res.status(200).send("ERROR");
     }
 
-    // 🔓 AES key decrypt (RSA)
+    // 🔓 AES KEY (RSA decrypt)
     const aesKey = crypto.privateDecrypt(
       {
         key: PRIVATE_KEY,
@@ -80,33 +70,35 @@ app.post("/flow", (req, res) => {
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    const iv = Buffer.from(initial_vector, "base64");
-
-    if (iv.length !== 16) {
+    // 🔓 REQUEST IV
+    const requestIV = Buffer.from(initial_vector, "base64");
+    if (requestIV.length !== 16) {
       return res.status(200).send("ERROR");
     }
 
-    // 🔓 Flow data decrypt
-    const decrypted = decryptAES(
+    // 🔓 DECRYPT REQUEST PAYLOAD
+    const decryptedPayload = decryptAES(
       encrypted_flow_data,
       aesKey,
-      iv
+      requestIV
     );
 
-    console.log("✅ Decrypted Flow Payload:", decrypted);
+    console.log("✅ Flow payload:", decryptedPayload);
 
-    // 🟢 IMPORTANT:
-    // Meta expects encrypted response EVEN recall ma
-    const encryptedResponse = encryptAES("{}", aesKey, iv);
+    // 🟢 CREATE NEW IV FOR RESPONSE (🔥 THIS WAS THE ISSUE)
+    const responseIV = crypto.randomBytes(16);
 
+    // 🟢 Encrypt response payload
+    const encryptedResponse = encryptAES("{}", aesKey, responseIV);
+
+    // 🟢 Meta expects IV prefixed automatically handled
     res
       .status(200)
       .set("Content-Type", "text/plain")
       .send(encryptedResponse);
 
   } catch (err) {
-    console.error("❌ Flow error:", err.message);
-    // ❗ Meta still expects 200
+    console.error("❌ Flow crypto error:", err.message);
     return res.status(200).send("ERROR");
   }
 });
