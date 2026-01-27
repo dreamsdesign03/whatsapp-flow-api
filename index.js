@@ -43,8 +43,8 @@ function decryptAES(encryptedData, aesKey, iv) {
 
 function encryptAES(data, aesKey, iv) {
   const cipher = crypto.createCipheriv("aes-256-cbc", aesKey, iv);
-  let encrypted = cipher.update(data, "utf8", "base64");
-  encrypted += cipher.final("base64");
+  let encrypted = cipher.update(data, "utf8");
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
   return encrypted;
 }
 
@@ -60,7 +60,7 @@ app.post("/flow", (req, res) => {
       return res.status(200).send("ERROR");
     }
 
-    // 🔓 AES KEY (RSA decrypt)
+    // 🔓 AES key decrypt
     const aesKey = crypto.privateDecrypt(
       {
         key: PRIVATE_KEY,
@@ -70,13 +70,13 @@ app.post("/flow", (req, res) => {
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    // 🔓 REQUEST IV
+    // 🔓 Request IV
     const requestIV = Buffer.from(initial_vector, "base64");
     if (requestIV.length !== 16) {
       return res.status(200).send("ERROR");
     }
 
-    // 🔓 DECRYPT REQUEST PAYLOAD
+    // 🔓 Decrypt request payload
     const decryptedPayload = decryptAES(
       encrypted_flow_data,
       aesKey,
@@ -85,17 +85,20 @@ app.post("/flow", (req, res) => {
 
     console.log("✅ Flow payload:", decryptedPayload);
 
-    // 🟢 CREATE NEW IV FOR RESPONSE (🔥 THIS WAS THE ISSUE)
+    // 🟢 RESPONSE ENCRYPTION (META FORMAT)
     const responseIV = crypto.randomBytes(16);
+    const encryptedPayload = encryptAES("{}", aesKey, responseIV);
 
-    // 🟢 Encrypt response payload
-    const encryptedResponse = encryptAES("{}", aesKey, responseIV);
+    // 🟢 IMPORTANT: IV + encrypted payload
+    const finalResponse = Buffer.concat([
+      responseIV,
+      encryptedPayload,
+    ]).toString("base64");
 
-    // 🟢 Meta expects IV prefixed automatically handled
     res
       .status(200)
       .set("Content-Type", "text/plain")
-      .send(encryptedResponse);
+      .send(finalResponse);
 
   } catch (err) {
     console.error("❌ Flow crypto error:", err.message);
