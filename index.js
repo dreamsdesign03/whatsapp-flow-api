@@ -85,7 +85,7 @@ const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
   ]).toString("base64");
 };
 
-// ૩. મેઈન રૂટ
+// ૩. મેઈન POST રૂટ
 app.post("/flow", async (req, res) => {
   try {
     // Health Check માટે સાદો રિસ્પોન્સ
@@ -101,9 +101,16 @@ app.post("/flow", async (req, res) => {
     const screenData = {
       version: "3.0",
       screen: "SUCCESS",
-      data: { extension_message_response: { params: { "message": "Success" } } }
+      data: {
+        extension_message_response: {
+          params: {
+            message: "Success"
+          }
+        }
+      }
     };
 
+    // જવાબ સીધો plaintext string તરીકે મોકલવો (Base64)
     res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
   } catch (error) {
     console.error("❌ Error:", error.message);
@@ -111,4 +118,4 @@ app.post("/flow", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`App listening on port ${PORT}!`));
+app.listen(PORT, () => console.log(`🚀 App is listening on port ${PORT}!`));
