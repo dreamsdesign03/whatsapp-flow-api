@@ -9,6 +9,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080; 
 const N8N_WEBHOOK_URL = "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64";
 
+// તમારી પ્રાઈવેટ કી (Direct Code માં)
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -69,26 +70,31 @@ app.post("/flow", async (req, res) => {
     if (!req.body.encrypted_flow_data) return res.status(200).send("OK");
     const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
     
-    console.log("✅ Data Received:", decryptedBody);
+    // --- Health Check (Ping) Fix ---
+    if (decryptedBody.action === "ping") {
+        const pingResponse = { data: { status: "active" } };
+        console.log("✅ Health Check Ping Received");
+        return res.send(encryptResponse(pingResponse, aesKeyBuffer, initialVectorBuffer));
+    }
+
+    console.log("✅ Decrypted Data:", decryptedBody);
     axios.post(N8N_WEBHOOK_URL, decryptedBody).catch(() => {});
 
-    // આ રિસ્પોન્સ Meta ના સ્ટાન્ડર્ડ મુજબ છે
+    // Flow રિસ્પોન્સ
     const screenData = {
       version: "3.0",
       action: "complete", 
-      screen: "SUMMARY",
+      screen: "SUMMARY", 
       data: {
         extension_message_response: {
-          params: {
-            "message": "Appointment Confirmed Successfully!"
-          }
+          params: { "message": "Success" }
         }
       }
     };
 
     res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
   } catch (error) {
-    console.error("❌ Error:", error.message);
+    console.error("❌ Critical Error:", error.message);
     res.status(500).send("Internal Error");
   }
 });
