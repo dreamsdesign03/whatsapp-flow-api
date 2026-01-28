@@ -5,10 +5,10 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
+// Railway માટે પોર્ટ સેટઅપ
+const PORT = process.env.PORT || 8080; 
 const N8N_WEBHOOK_URL = "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64";
 
-// તમારી પ્રાઈવેટ કી
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -51,8 +51,11 @@ const decryptRequest = (body, privatePem) => {
   const encrypted_flow_data_tag = flowDataBuffer.subarray(-TAG_LENGTH);
   const decipher = crypto.createDecipheriv("aes-128-gcm", decryptedAesKey, initialVectorBuffer);
   decipher.setAuthTag(encrypted_flow_data_tag);
-  const decryptedJSONString = Buffer.concat([decipher.update(encrypted_flow_data_body), decipher.final()]).toString("utf-8");
-  return { decryptedBody: JSON.parse(decryptedJSONString), aesKeyBuffer: decryptedAesKey, initialVectorBuffer };
+  return {
+    decryptedBody: JSON.parse(Buffer.concat([decipher.update(encrypted_flow_data_body), decipher.final()]).toString("utf-8")),
+    aesKeyBuffer: decryptedAesKey,
+    initialVectorBuffer
+  };
 };
 
 const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
@@ -66,19 +69,18 @@ app.post("/flow", async (req, res) => {
     if (!req.body.encrypted_flow_data) return res.status(200).send("OK");
     const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
     
-    // n8n પર ડેટા મોકલો
+    console.log("✅ Data Received:", decryptedBody);
     axios.post(N8N_WEBHOOK_URL, decryptedBody).catch(() => {});
 
-    // રિસ્પોન્સ - અહીં SUMMARY સ્ક્રીન વાપરી છે કારણ કે તારા Flow માં એ જ છે
+    // આ રિસ્પોન્સ Meta ના સ્ટાન્ડર્ડ મુજબ છે
     const screenData = {
       version: "3.0",
-      action: "complete",
+      action: "complete", 
       screen: "SUMMARY",
       data: {
-        ...decryptedBody.data, // આ લાઈન ઉમેરો જેથી Meta ને જૂનો સંદર્ભ મળે
         extension_message_response: {
           params: {
-            "message": "Appointment Confirmed Successfully!" 
+            "message": "Appointment Confirmed Successfully!"
           }
         }
       }
@@ -86,8 +88,9 @@ app.post("/flow", async (req, res) => {
 
     res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
   } catch (error) {
+    console.error("❌ Error:", error.message);
     res.status(500).send("Internal Error");
   }
 });
 
-app.listen(PORT, () => console.log(`🚀 App listening on port ${PORT}!`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 App listening on port ${PORT}!`));
