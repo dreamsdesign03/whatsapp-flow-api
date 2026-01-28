@@ -72,8 +72,15 @@ app.post("/flow", async (req, res) => {
     // રિસ્પોન્સ - અહીં SUMMARY સ્ક્રીન વાપરી છે કારણ કે તારા Flow માં એ જ છે
     const screenData = {
       version: "3.0",
-      screen: "SUMMARY", 
-      data: { extension_message_response: { params: { "message": "Success" } } }
+      action: "complete", // આ લાઈન Meta ને કહેશે કે Flow સફળતાપૂર્વક પૂરો થયો છે
+      screen: "SUMMARY",  // તારા Flow JSON માં છેલ્લી સ્ક્રીનનું નામ SUMMARY છે
+      data: {
+        extension_message_response: {
+          params: {
+            "message": "Appointment Confirmed Successfully!" 
+          }
+        }
+      }
     };
 
     res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
