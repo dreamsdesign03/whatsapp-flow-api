@@ -103,19 +103,17 @@ app.post("/flow", (req, res) => {
     }
 
     const { data, aesKey, iv } = decryptRequest(req.body);
-    console.log("Action Received:", data.action);
+    console.log("📥 Action Received:", data.action);
+    console.log("📥 Full Payload:", JSON.stringify(data));
 
-    // Initial response structure
     let responseBody = {
       version: "3.0",
-      screen: "APPOINTMENT", 
+      screen: "APPOINTMENT",
       data: {}
     };
 
-    /**
-     * 🛠️ FIX: Handle INIT and ping properly
-     * Jyare flow mobile ma open thase tyare action 'INIT' hase.
-     */
+    // logic to provide data
+    // handling 'INIT', 'ping', or empty data (first load)
     if (!data.action || data.action === "ping" || data.action === "INIT") {
       responseBody.data = {
         date_options: dates,
@@ -123,23 +121,23 @@ app.post("/flow", (req, res) => {
         is_time_enabled: false
       };
     } 
-    // Jyare user date select kare (Dropdown on-select-action)
+    // handling date selection
     else if (data.action === "data_exchange") {
-        // Check karo ke payload ma date che ke nahi
-        if (data.data && data.data.date) {
-            responseBody.data = {
-                time_options: times,
-                is_time_enabled: true
-            };
-        } else {
-            // Default load jo data exchange vagar aave
-            responseBody.data = {
-                date_options: dates,
-                time_options: [],
-                is_time_enabled: false
-            };
-        }
-    } 
+      // Jo date dropdown select thayo hoy
+      if (data.data && data.data.date) {
+        responseBody.data = {
+          time_options: times,
+          is_time_enabled: true
+        };
+      } else {
+        // Fallback for initial load through data_exchange
+        responseBody.data = {
+          date_options: dates,
+          time_options: [],
+          is_time_enabled: false
+        };
+      }
+    }
     else if (data.action === "complete_booking") {
       responseBody.data = { success: true };
     }
@@ -149,7 +147,7 @@ app.post("/flow", (req, res) => {
     return res.status(200).send(encryptedRes);
 
   } catch (error) {
-    console.error("Error:", error.message);
+    console.error("❌ Error:", error.message);
     return res.status(421).send("Decryption failed");
   }
 });
