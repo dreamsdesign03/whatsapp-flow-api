@@ -5,11 +5,13 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
-// Railway માટે પોર્ટ સેટઅપ
-const PORT = process.env.PORT || 8080; 
-const N8N_WEBHOOK_URL = "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64";
+/* ================= CONFIG ================= */
 
-// તમારી પ્રાઈવેટ કી (Direct Code માં)
+const PORT = process.env.PORT || 8080;
+const N8N_WEBHOOK_URL =
+  "https://n8n.srv891967.hstgr.cloud/webhook/1073466d-3451-4f8c-aec2-61cc763d2f64";
+
+// ⚠️ PROD ma ENV variable use karjo
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -39,64 +41,168 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
+/* ================= CRYPTO HELPERS ================= */
+
 const decryptRequest = (body, privatePem) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
-  const decryptedAesKey = crypto.privateDecrypt(
-    { key: crypto.createPrivateKey(privatePem), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+
+  const aesKey = crypto.privateDecrypt(
+    {
+      key: crypto.createPrivateKey(privatePem),
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    },
     Buffer.from(encrypted_aes_key, "base64")
   );
-  const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-  const initialVectorBuffer = Buffer.from(initial_vector, "base64");
+
+  const dataBuffer = Buffer.from(encrypted_flow_data, "base64");
+  const ivBuffer = Buffer.from(initial_vector, "base64");
+
   const TAG_LENGTH = 16;
-  const encrypted_flow_data_body = flowDataBuffer.subarray(0, -TAG_LENGTH);
-  const encrypted_flow_data_tag = flowDataBuffer.subarray(-TAG_LENGTH);
-  const decipher = crypto.createDecipheriv("aes-128-gcm", decryptedAesKey, initialVectorBuffer);
-  decipher.setAuthTag(encrypted_flow_data_tag);
+  const encrypted = dataBuffer.subarray(0, -TAG_LENGTH);
+  const tag = dataBuffer.subarray(-TAG_LENGTH);
+
+  const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
+  decipher.setAuthTag(tag);
+
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final(),
+  ]).toString("utf-8");
+
   return {
-    decryptedBody: JSON.parse(Buffer.concat([decipher.update(encrypted_flow_data_body), decipher.final()]).toString("utf-8")),
-    aesKeyBuffer: decryptedAesKey,
-    initialVectorBuffer
+    decryptedBody: JSON.parse(decrypted),
+    aesKeyBuffer: aesKey,
+    initialVectorBuffer: ivBuffer,
   };
 };
 
-const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
-  const flipped_iv = Buffer.from(initialVectorBuffer.map((byte) => ~byte));
-  const cipher = crypto.createCipheriv("aes-128-gcm", aesKeyBuffer, flipped_iv);
-  return Buffer.concat([cipher.update(JSON.stringify(response), "utf-8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
+const encryptResponse = (response, aesKey, iv) => {
+  const flippedIv = Buffer.from(iv.map((b) => ~b));
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+
+  return Buffer.concat([
+    cipher.update(JSON.stringify(response), "utf-8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]).toString("base64");
 };
+
+/* ================= DATA HELPERS ================= */
+
+function getNext7Days() {
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    days.push({
+      id: d.toISOString().split("T")[0],
+      title: d.toDateString(),
+    });
+  }
+  return days;
+}
+
+function getTimeSlots(date) {
+  // future ma DB / Google Sheet thi aavi sake
+  return [
+    { id: "10:00", title: "10:00 AM", enabled: true },
+    { id: "11:00", title: "11:00 AM", enabled: true },
+    { id: "12:00", title: "12:00 PM", enabled: false },
+    { id: "13:00", title: "01:00 PM", enabled: true },
+  ];
+}
+
+/* ================= FLOW ENDPOINT ================= */
 
 app.post("/flow", async (req, res) => {
   try {
-    if (!req.body.encrypted_flow_data) return res.status(200).send("OK");
-    const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
-    
-    // --- Health Check (Ping) Fix ---
-    if (decryptedBody.action === "ping") {
-        const pingResponse = { data: { status: "active" } };
-        console.log("✅ Health Check Ping Received");
-        return res.send(encryptResponse(pingResponse, aesKeyBuffer, initialVectorBuffer));
+    // Meta initial handshake
+    if (!req.body.encrypted_flow_data) {
+      return res.status(200).send("OK");
     }
 
-    console.log("✅ Decrypted Data:", decryptedBody);
-    axios.post(N8N_WEBHOOK_URL, decryptedBody).catch(() => {});
+    const { decryptedBody, aesKeyBuffer, initialVectorBuffer } =
+      decryptRequest(req.body, PRIVATE_KEY);
 
-    // Flow રિસ્પોન્સ
-    const screenData = {
-      version: "3.0",
-      action: "complete", 
-      screen: "SUMMARY", 
-      data: {
-        extension_message_response: {
-          params: { "message": "Success" }
-        }
-      }
-    };
+    console.log("📩 FLOW DATA:", decryptedBody);
 
-    res.send(encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer));
-  } catch (error) {
-    console.error("❌ Critical Error:", error.message);
+    /* ---------- PING ---------- */
+    if (decryptedBody.action === "ping") {
+      return res.send(
+        encryptResponse(
+          { data: { status: "active" } },
+          aesKeyBuffer,
+          initialVectorBuffer
+        )
+      );
+    }
+
+    /* ---------- INITIAL LOAD ---------- */
+    if (!decryptedBody.action) {
+      return res.send(
+        encryptResponse(
+          {
+            data: {
+              date_options: getNext7Days(),
+              time_options: [],
+              is_time_enabled: false,
+            },
+          },
+          aesKeyBuffer,
+          initialVectorBuffer
+        )
+      );
+    }
+
+    /* ---------- DATE SELECTED ---------- */
+    if (decryptedBody.action === "date_selected") {
+      return res.send(
+        encryptResponse(
+          {
+            data: {
+              time_options: getTimeSlots(decryptedBody.date),
+              is_time_enabled: true,
+            },
+          },
+          aesKeyBuffer,
+          initialVectorBuffer
+        )
+      );
+    }
+
+    /* ---------- FINAL SUBMIT ---------- */
+    if (decryptedBody.action === "complete_booking") {
+      // forward to n8n / DB
+      axios.post(N8N_WEBHOOK_URL, decryptedBody).catch(() => {});
+
+      return res.send(
+        encryptResponse(
+          {
+            action: "complete",
+            data: {
+              extension_message_response: {
+                params: {
+                  message: "✅ Appointment booked successfully",
+                },
+              },
+            },
+          },
+          aesKeyBuffer,
+          initialVectorBuffer
+        )
+      );
+    }
+
+    return res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ FLOW ERROR:", err.message);
     res.status(500).send("Internal Error");
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 App listening on port ${PORT}!`));
+/* ================= SERVER ================= */
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 WhatsApp Flow backend running on port ${PORT}`);
+});
