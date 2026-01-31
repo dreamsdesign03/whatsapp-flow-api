@@ -6,7 +6,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-/* 🔐 PRIVATE KEY (Exactly jem chhe em j rehva dejo) */
+// 🔐 Tamari Private Key (Amuk bhag hide karyo chhe safety mate, tame tamari full key nakhjo)
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -37,123 +37,110 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 -----END PRIVATE KEY-----`;
 
 /**
- * 🔓 DECRYPT FUNCTION
+ * 🔓 Decrypt Function
  */
 function decryptRequest(body) {
-    const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+  const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
 
-    // 1. Decrypt AES Key using RSA Private Key
-    const aesKey = crypto.privateDecrypt(
-        {
-            key: PRIVATE_KEY,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: "sha256",
-        },
-        Buffer.from(encrypted_aes_key, "base64")
-    );
+  const aesKey = crypto.privateDecrypt(
+    {
+      key: PRIVATE_KEY,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    },
+    Buffer.from(encrypted_aes_key, "base64")
+  );
 
-    const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-    const ivBuffer = Buffer.from(initial_vector, "base64");
+  const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
+  const ivBuffer = Buffer.from(initial_vector, "base64");
 
-    // 2. Extract Tag (Last 16 bytes) and Ciphertext
-    const tag = flowDataBuffer.slice(-16);
-    const encryptedData = flowDataBuffer.slice(0, -16);
+  const tag = flowDataBuffer.slice(-16);
+  const encryptedData = flowDataBuffer.slice(0, -16);
 
-    // 3. Decrypt Flow Data using AES-GCM
-    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
-    decipher.setAuthTag(tag);
+  const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
+  decipher.setAuthTag(tag);
 
-    const decrypted = Buffer.concat([
-        decipher.update(encryptedData),
-        decipher.final(),
-    ]).toString("utf-8");
+  const decrypted = Buffer.concat([
+    decipher.update(encryptedData),
+    decipher.final(),
+  ]).toString("utf-8");
 
-    return { data: JSON.parse(decrypted), aesKey, iv: ivBuffer };
+  return { data: JSON.parse(decrypted), aesKey, iv: ivBuffer };
 }
 
 /**
- * 🔒 ENCRYPT FUNCTION
+ * 🔒 Encrypt Function
  */
 function encryptResponse(data, aesKey, iv) {
-    // WhatsApp expectation: Flip bits of the IV for response
-    const flippedIv = Buffer.from(iv.map((b) => ~b));
-    
-    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
-    
-    const ciphertext = Buffer.concat([
-        cipher.update(JSON.stringify(data), "utf8"),
-        cipher.final(),
-        cipher.getAuthTag(),
-    ]);
+  const flippedIv = Buffer.from(iv.map((b) => ~b));
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
 
-    return ciphertext.toString("base64");
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(data), "utf8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]);
+
+  return ciphertext.toString("base64");
 }
 
-/* 📅 STATIC DATA */
+/* 📅 DATA */
 const dates = [
-    { id: "2026-01-31", title: "Sat, Jan 31" },
-    { id: "2026-02-01", title: "Sun, Feb 1" }
+  { id: "2026-01-31", title: "Sat, Jan 31" },
+  { id: "2026-02-01", title: "Sun, Feb 1" }
 ];
 
 const times = [
-    { id: "10:00", title: "10:00 AM", enabled: true },
-    { id: "11:00", title: "11:00 AM", enabled: true }
+  { id: "10:00", title: "10:00 AM", enabled: true },
+  { id: "11:00", title: "11:00 AM", enabled: true }
 ];
 
-/* 🚀 FLOW ENDPOINT */
+/* 🚀 MAIN ENDPOINT */
 app.post("/flow", (req, res) => {
-    try {
-        if (!req.body.encrypted_flow_data) {
-            return res.status(400).send("Missing encrypted data");
-        }
-
-        const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 RECEIVED ACTION:", data.action);
-        console.log("📥 PAYLOAD:", data);
-
-        let responseBody = {
-            version: "3.0", // Flows Data API Version
-            data: {}
-        };
-
-        // --- logic routing ---
-
-        // 1. Initial Load or Ping
-        if (!data.action || data.action === "ping") {
-            responseBody.data = {
-                date_options: dates,
-                time_options: [],
-                is_time_enabled: false
-            };
-        } 
-        // 2. When user selects a date
-        else if (data.action === "date_selected") {
-            responseBody.data = {
-                time_options: times,
-                is_time_enabled: true
-            };
-        }
-        // 3. Final submission
-        else if (data.action === "complete_booking") {
-            console.log("✅ SUCCESSFUL BOOKING:", data);
-            responseBody.data = {
-                success: true,
-                message: "Appointment confirmed!"
-            };
-        }
-
-        // Encrypt the response
-        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
-
-        // ⚠️ VERY IMPORTANT: Content-Type must be text/plain
-        res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptedRes);
-
-    } catch (err) {
-        console.error("❌ ERROR:", err.message);
-        // If decryption fails, Meta expects 421
-        return res.status(421).send("Decryption failed");
+  try {
+    // 1. Initial health check or empty request
+    if (!req.body.encrypted_flow_data) {
+      return res.status(200).send("Endpoint is active");
     }
+
+    const { data, aesKey, iv } = decryptRequest(req.body);
+    console.log("Action Received:", data.action);
+
+    let responseBody = {
+      version: "3.0",
+      screen: data.screen || "APPOINTMENT", // 👈 AA JARURI CHHE (Error solution)
+      data: {}
+    };
+
+    // 2. Logic based on action
+    if (!data.action || data.action === "ping" || data.action === "init") {
+      responseBody.data = {
+        date_options: dates,
+        time_options: [],
+        is_time_enabled: false
+      };
+    } 
+    else if (data.action === "date_selected") {
+      responseBody.data = {
+        time_options: times,
+        is_time_enabled: true
+      };
+    } 
+    else if (data.action === "complete_booking") {
+      responseBody.data = { success: true };
+    }
+
+    // 3. Encrypt the whole response body
+    const encryptedRes = encryptResponse(responseBody, aesKey, iv);
+
+    // 4. IMPORTANT: Content-Type MUST be text/plain for the encrypted string
+    res.setHeader("Content-Type", "text/plain");
+    return res.status(200).send(encryptedRes);
+
+  } catch (error) {
+    console.error("Error:", error.message);
+    return res.status(421).send("Decryption failed");
+  }
 });
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Flow Server Live on ${PORT}`));
