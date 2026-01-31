@@ -98,7 +98,6 @@ const times = [
 /* 🚀 MAIN ENDPOINT */
 app.post("/flow", (req, res) => {
   try {
-    // 1. Initial health check or empty request
     if (!req.body.encrypted_flow_data) {
       return res.status(200).send("Endpoint is active");
     }
@@ -106,34 +105,46 @@ app.post("/flow", (req, res) => {
     const { data, aesKey, iv } = decryptRequest(req.body);
     console.log("Action Received:", data.action);
 
+    // Initial response structure
     let responseBody = {
       version: "3.0",
-      screen: data.screen || "APPOINTMENT", // 👈 AA JARURI CHHE (Error solution)
+      screen: "APPOINTMENT", 
       data: {}
     };
 
-    // 2. Logic based on action
-    if (!data.action || data.action === "ping" || data.action === "init") {
+    /**
+     * 🛠️ FIX: Handle INIT and ping properly
+     * Jyare flow mobile ma open thase tyare action 'INIT' hase.
+     */
+    if (!data.action || data.action === "ping" || data.action === "INIT") {
       responseBody.data = {
         date_options: dates,
         time_options: [],
         is_time_enabled: false
       };
     } 
-    else if (data.action === "date_selected") {
-      responseBody.data = {
-        time_options: times,
-        is_time_enabled: true
-      };
+    // Jyare user date select kare (Dropdown on-select-action)
+    else if (data.action === "data_exchange") {
+        // Check karo ke payload ma date che ke nahi
+        if (data.data && data.data.date) {
+            responseBody.data = {
+                time_options: times,
+                is_time_enabled: true
+            };
+        } else {
+            // Default load jo data exchange vagar aave
+            responseBody.data = {
+                date_options: dates,
+                time_options: [],
+                is_time_enabled: false
+            };
+        }
     } 
     else if (data.action === "complete_booking") {
       responseBody.data = { success: true };
     }
 
-    // 3. Encrypt the whole response body
     const encryptedRes = encryptResponse(responseBody, aesKey, iv);
-
-    // 4. IMPORTANT: Content-Type MUST be text/plain for the encrypted string
     res.setHeader("Content-Type", "text/plain");
     return res.status(200).send(encryptedRes);
 
@@ -142,5 +153,4 @@ app.post("/flow", (req, res) => {
     return res.status(421).send("Decryption failed");
   }
 });
-
 app.listen(PORT, () => console.log(`🚀 Flow Server Live on ${PORT}`));
