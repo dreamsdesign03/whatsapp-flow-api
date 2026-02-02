@@ -4,9 +4,9 @@ import crypto from "crypto";
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
+const PORT = 8080;
 
-// ✅ Tamari PKCS#8 formatted Private Key ahiya nakhjo
+/* 🔐 PRIVATE KEY (Meta se jo generate ki ho) */
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -36,96 +36,65 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-// --- 🔓 Decryption Logic (As per Doc) ---
-const decryptRequest = (body, privatePem) => {
-  const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
-
-  const decryptedAesKey = crypto.privateDecrypt(
+/* 🔓 Decrypt */
+function decrypt(body) {
+  const aesKey = crypto.privateDecrypt(
     {
-      key: crypto.createPrivateKey(privatePem),
+      key: PRIVATE_KEY,
       padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-      oaepHash: "sha256",
+      oaepHash: "sha256"
     },
-    Buffer.from(encrypted_aes_key, "base64"),
+    Buffer.from(body.encrypted_aes_key, "base64")
   );
 
-  const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-  const initialVectorBuffer = Buffer.from(initial_vector, "base64");
+  const flowData = Buffer.from(body.encrypted_flow_data, "base64");
+  const iv = Buffer.from(body.initial_vector, "base64");
 
-  const TAG_LENGTH = 16;
-  const encrypted_flow_data_body = flowDataBuffer.subarray(0, -TAG_LENGTH);
-  const encrypted_flow_data_tag = flowDataBuffer.subarray(-TAG_LENGTH);
+  const encrypted = flowData.slice(0, -16);
+  const tag = flowData.slice(-16);
 
-  const decipher = crypto.createDecipheriv(
-    "aes-128-gcm",
-    decryptedAesKey,
-    initialVectorBuffer,
-  );
-  decipher.setAuthTag(encrypted_flow_data_tag);
+  const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, iv);
+  decipher.setAuthTag(tag);
 
-  const decryptedJSONString = Buffer.concat([
-    decipher.update(encrypted_flow_data_body),
-    decipher.final(),
-  ]).toString("utf-8");
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final()
+  ]).toString();
 
-  return {
-    decryptedBody: JSON.parse(decryptedJSONString),
-    aesKeyBuffer: decryptedAesKey,
-    initialVectorBuffer,
-  };
-};
+  return { data: JSON.parse(decrypted), aesKey, iv };
+}
 
-// --- 🔒 Encryption Logic (As per Doc) ---
-const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
-  const flipped_iv = [];
-  for (const pair of initialVectorBuffer.entries()) {
-    flipped_iv.push(~pair[1]);
-  }
-  const cipher = crypto.createCipheriv(
-    "aes-128-gcm",
-    aesKeyBuffer,
-    Buffer.from(flipped_iv),
-  );
+/* 🔒 Encrypt */
+function encrypt(data, aesKey, iv) {
+  const flippedIv = Buffer.from(iv.map(b => ~b));
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+
   return Buffer.concat([
-    cipher.update(JSON.stringify(response), "utf-8"),
+    cipher.update(JSON.stringify(data)),
     cipher.final(),
-    cipher.getAuthTag(),
+    cipher.getAuthTag()
   ]).toString("base64");
-};
+}
 
-// --- 📅 Dynamic Data Helpers ---
-const getNext7Days = () => {
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        days.push({ id: d.toISOString().split('T')[0], title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
-    }
-    return days;
-};
+/* 📅 DATA */
+const dates = [
+  { id: "2026-01-31", title: "Sat, Jan 31" },
+  { id: "2026-02-01", title: "Sun, Feb 1" }
+];
 
-// --- 🚀 Main Endpoint ---
+const times = [
+  { id: "10:00", title: "10:00 AM", enabled: true },
+  { id: "11:00", title: "11:00 AM", enabled: true }
+];
+
+/* 🚀 FLOW ENDPOINT */
 app.post("/flow", (req, res) => {
-
-  // ✅ Health check
-  if (
-    req.body.version === "3.0" &&
-    !req.body.encrypted_flow_data
-  ) {
-    return res.json({
-      version: "3.0",
-      screen: "APPOINTMENT",
-      data: {}
-    });
-  }
-
-  if (!req.body.encrypted_flow_data) {
-    return res.send("OK");
-  }
+  if (!req.body.encrypted_flow_data) return res.send("OK");
 
   const { data, aesKey, iv } = decrypt(req.body);
   console.log("FLOW:", data);
 
+  /* INITIAL LOAD */
   if (!data.action) {
     return res.send(
       encrypt(
@@ -142,6 +111,7 @@ app.post("/flow", (req, res) => {
     );
   }
 
+  /* DATE SELECTED */
   if (data.action === "date_selected") {
     return res.send(
       encrypt(
@@ -157,16 +127,15 @@ app.post("/flow", (req, res) => {
     );
   }
 
+  /* FINAL SUBMIT */
   if (data.action === "complete_booking") {
     console.log("✅ BOOKED:", data);
-    return res.send(
-      encrypt({ data: { success: true } }, aesKey, iv)
-    );
+    return res.send(encrypt({ data: { success: true } }, aesKey, iv));
   }
 
   res.send("OK");
 });
 
-
-app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}!`));
-
+app.listen(PORT, () =>
+  console.log(`🚀 Flow backend running on ${PORT}`)
+);
