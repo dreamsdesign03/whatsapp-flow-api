@@ -6,6 +6,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
+// ✅ Key format fixed with Headers and Newlines
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -33,21 +34,28 @@ A1NWVa9AobgwtE9YkXpFmKHp3T2um+BLBNG3oWlzy893o9ob5wikOLmxnTA9NTVX
 Ej76VZG+osgyWqq4z4xYy6wkRkhyCKN9ogRt4FN3+9sKsl+pnfg4QwyPQWwXRU0j
 G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
-... (Tamari Full Private Key Ahiya Nakhjo) ...
 -----END PRIVATE KEY-----`;
 
 function decryptRequest(body) {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+    
     const aesKey = crypto.privateDecrypt(
-        { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+        { 
+            key: PRIVATE_KEY, 
+            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
+            oaepHash: "sha256" 
+        },
         Buffer.from(encrypted_aes_key, "base64")
     );
+
     const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
     const ivBuffer = Buffer.from(initial_vector, "base64");
     const tag = flowDataBuffer.slice(-16);
     const encryptedData = flowDataBuffer.slice(0, -16);
+
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
     decipher.setAuthTag(tag);
+    
     const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8");
     return { data: JSON.parse(decrypted), aesKey, iv: ivBuffer };
 }
@@ -55,39 +63,49 @@ function decryptRequest(body) {
 function encryptResponse(data, aesKey, iv) {
     const flippedIv = Buffer.from(iv.map((b) => ~b));
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
-    const ciphertext = Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]);
+    const ciphertext = Buffer.concat([
+        cipher.update(JSON.stringify(data), "utf8"), 
+        cipher.final(), 
+        cipher.getAuthTag()
+    ]);
     return ciphertext.toString("base64");
 }
 
-const dates = [{ id: "2026-01-31", title: "Sat, Jan 31" }, { id: "2026-02-01", title: "Sun, Feb 1" }];
-const times = [{ id: "10:00", title: "10:00 AM", enabled: true }, { id: "11:00", title: "11:00 AM", enabled: true }];
+const dates = [
+    { id: "2026-02-02", title: "Mon, Feb 2" },
+    { id: "2026-02-03", title: "Tue, Feb 3" }
+];
+const times = [
+    { id: "10:00", title: "10:00 AM", enabled: true },
+    { id: "11:00", title: "11:00 AM", enabled: true }
+];
 
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Endpoint active");
 
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action:", data.action);
+        console.log("📥 RECEIVED ACTION:", data.action);
 
         let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-        // Logic for providing dynamic data
-        if (!data.action || data.action === "ping" || data.action === "INIT") {
+        // Core logic to load dynamic data
+        if (!data.action || data.action === "ping" || data.action === "INIT" || (data.action === "data_exchange" && !data.data?.date)) {
             responseBody.data = { date_options: dates, time_options: [], is_time_enabled: false };
         } 
-        else if (data.action === "data_exchange") {
-            if (data.data && data.data.date) {
-                responseBody.data = { time_options: times, is_time_enabled: true };
-            } else {
-                responseBody.data = { date_options: dates, time_options: [], is_time_enabled: false };
-            }
+        else if (data.action === "data_exchange" && data.data?.date) {
+            responseBody.data = { time_options: times, is_time_enabled: true };
+        }
+        else if (data.action === "complete_booking") {
+            responseBody.data = { success: true };
         }
 
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
+
     } catch (error) {
-        console.error("❌ Error:", error.message);
+        console.error("❌ ERROR:", error.message);
         return res.status(421).send("Decryption failed");
     }
 });
