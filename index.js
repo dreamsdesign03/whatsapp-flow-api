@@ -81,46 +81,33 @@ const getTimeSlots = () => {
 
 // --- 🚀 Main Endpoint ---
 app.post("/flow", (req, res) => {
-    // 1. Meta Health Check: Documentation mujab aa format farajiyat chhe
+    // 1. Meta Health Check (PING) Handling
+    // Documentation mujab health check ma aa response farajiyat che
     if (req.body.action === "ping") {
-        return res.status(200).json({ data: { status: "active" } });
+        return res.status(200).json({ 
+            data: { 
+                status: "active" 
+            } 
+        });
     }
 
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-        
+
         const { data, aesKey, iv } = decryptRequest(req.body);
         console.log("📥 RECEIVED ACTION:", data.action);
 
+        // ... baki nu logic (INIT, data_exchange) same rahese ...
+        
         let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
+        // Tamaru dynamic logic ahiya aavse (date_options, etc.)
 
-        // 2. Logic to provide data based on actions
-        if (data.action === "INIT" || !data.action) {
-            responseBody.data = {
-                date_options: getNext7Days(),
-                time_options: [],
-                is_time_enabled: false
-            };
-        } 
-        else if (data.action === "date_selected" || data.action === "data_exchange") {
-            responseBody.data = {
-                time_options: getTimeSlots(),
-                is_time_enabled: true
-            };
-        }
-        else if (data.action === "complete_booking") {
-            // Ahiya booking success terminal response
-            responseBody.data = { success: true };
-        }
-
-        // 3. Encrypt and Send with Plain Text Header
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
 
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        // Decryption fail thay to Meta documentation mujab logic handle karo
         return res.status(200).send("Endpoint active");
     }
 });
