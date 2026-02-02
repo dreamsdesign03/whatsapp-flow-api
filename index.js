@@ -81,39 +81,62 @@ app.post("/flow", (req, res) => {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
         const { data, aesKey, iv } = decryptRequest(req.body);
-        
-        // 1. Meta Health Check (Ping)
+        console.log("📥 Action:", data.action);
+
+        // 1. HEALTH CHECK (PING)
         if (data.action === "ping") {
             return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
 
-        let responseBody = { version: "3.0", data: {} };
+        // 2. INITIALIZE RESPONSE STRUCTURE
+        // Document mujab 'screen' property compulsory che top level par
+        let responseBody = { 
+            version: "3.0", 
+            screen: "APPOINTMENT", // Default screen name
+            data: {} 
+        };
 
-        // 2. Flow Opening
+        // 3. LOGIC BASED ON ACTION
         if (data.action === "INIT") {
-            responseBody.screen = "APPOINTMENT";
-            responseBody.data = { date_options: getDynamicDates(), time_options: [] };
+            responseBody.data = { 
+                date_options: getDynamicDates(), 
+                time_options: [] 
+            };
         } 
-        // 3. Date Selection
-        else if (data.action === "date_selected") {
-            const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${data.data.date}_${s.id}`));
-            responseBody.screen = "APPOINTMENT";
-            responseBody.data = { date_options: getDynamicDates(), time_options: availableTimes };
+        else if (data.action === "date_selected" || data.action === "data_exchange") {
+            // Dropdown select thay tyare screen name hamesha APPOINTMENT rehse
+            const selectedDate = data.data.date;
+            const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
+            
+            responseBody.screen = "APPOINTMENT"; 
+            responseBody.data = { 
+                date_options: getDynamicDates(), 
+                time_options: availableTimes 
+            };
         }
-        // 4. Final Confirmation
         else if (data.action === "complete_booking") {
-            bookedSlots.add(`${data.data.date}_${data.data.time}`);
-            responseBody.screen = "SUCCESS";
-            responseBody.data = { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } };
+            // FLOW COMPLETION logic as per document
+            const { date, time } = data.data;
+            bookedSlots.add(`${date}_${time}`);
+
+            responseBody.screen = "SUCCESS"; // Mandatory final screen name
+            responseBody.data = { 
+                extension_message_response: { 
+                    params: { 
+                        flow_token: data.flow_token, 
+                        status: "success" 
+                    } 
+                } 
+            };
         }
 
+        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        return res.status(200).send(encryptedRes);
 
-    } catch (e) {
-        console.error("❌ Decryption Error:", e.message);
+    } catch (error) {
+        console.error("❌ ERROR:", error.message);
         return res.status(421).send("Error");
     }
 });
-
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
