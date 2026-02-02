@@ -6,7 +6,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// ✅ Standard Private Key Format
+// ✅ Tamari PKCS#8 formatted Private Key ahiya nakhjo
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -36,30 +36,64 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-// --- 🔓 Decryption Logic (As per Meta Doc) ---
-function decryptRequest(body) {
-    const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
-    const aesKey = crypto.privateDecrypt(
-        { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
-        Buffer.from(encrypted_aes_key, "base64")
-    );
-    const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-    const ivBuffer = Buffer.from(initial_vector, "base64");
-    const tag = flowDataBuffer.slice(-16);
-    const encryptedData = flowDataBuffer.slice(0, -16);
-    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
-    decipher.setAuthTag(tag);
-    return { data: JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8")), aesKey, iv: ivBuffer };
-}
+// --- 🔓 Decryption Logic (As per Doc) ---
+const decryptRequest = (body, privatePem) => {
+  const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
 
-// --- 🔒 Encryption Logic (As per Meta Doc) ---
-function encryptResponse(data, aesKey, iv) {
-    const flippedIv = Buffer.from(iv.map((b) => ~b));
-    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
-    return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
-}
+  const decryptedAesKey = crypto.privateDecrypt(
+    {
+      key: crypto.createPrivateKey(privatePem),
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    },
+    Buffer.from(encrypted_aes_key, "base64"),
+  );
 
-// --- 📅 Data Generators ---
+  const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
+  const initialVectorBuffer = Buffer.from(initial_vector, "base64");
+
+  const TAG_LENGTH = 16;
+  const encrypted_flow_data_body = flowDataBuffer.subarray(0, -TAG_LENGTH);
+  const encrypted_flow_data_tag = flowDataBuffer.subarray(-TAG_LENGTH);
+
+  const decipher = crypto.createDecipheriv(
+    "aes-128-gcm",
+    decryptedAesKey,
+    initialVectorBuffer,
+  );
+  decipher.setAuthTag(encrypted_flow_data_tag);
+
+  const decryptedJSONString = Buffer.concat([
+    decipher.update(encrypted_flow_data_body),
+    decipher.final(),
+  ]).toString("utf-8");
+
+  return {
+    decryptedBody: JSON.parse(decryptedJSONString),
+    aesKeyBuffer: decryptedAesKey,
+    initialVectorBuffer,
+  };
+};
+
+// --- 🔒 Encryption Logic (As per Doc) ---
+const encryptResponse = (response, aesKeyBuffer, initialVectorBuffer) => {
+  const flipped_iv = [];
+  for (const pair of initialVectorBuffer.entries()) {
+    flipped_iv.push(~pair[1]);
+  }
+  const cipher = crypto.createCipheriv(
+    "aes-128-gcm",
+    aesKeyBuffer,
+    Buffer.from(flipped_iv),
+  );
+  return Buffer.concat([
+    cipher.update(JSON.stringify(response), "utf-8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]).toString("base64");
+};
+
+// --- 📅 Dynamic Data Helpers ---
 const getNext7Days = () => {
     const days = [];
     for (let i = 0; i < 7; i++) {
@@ -70,45 +104,58 @@ const getNext7Days = () => {
     return days;
 };
 
-const getTimeSlots = () => {
-    return [
-        { id: "11:30 AM", title: "11:30 AM", enabled: true },
-        { id: "12:00 PM", title: "12:00 PM", enabled: true },
-        { id: "04:00 PM", title: "04:00 PM", enabled: true },
-        { id: "06:30 PM", title: "06:30 PM", enabled: true }
-    ];
-};
-
 // --- 🚀 Main Endpoint ---
-app.post("/flow", (req, res) => {
-    // 1. Meta Health Check (PING) Handling
-    // Documentation mujab health check ma aa response farajiyat che
-    if (req.body.action === "ping") {
-        return res.status(200).json({ 
-            data: { 
-                status: "active" 
-            } 
-        });
+app.post("/flow", async (req, res) => {
+  // 1. Meta Health Check (PING) - Documentation Requirement
+  if (req.body.action === "ping") {
+    console.log("✅ Health Check (Ping) Received");
+    return res.status(200).json({ data: { status: "active" } });
+  }
+
+  try {
+    if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+
+    // 2. Decrypt Request
+    const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
+    const { action, data } = decryptedBody;
+    console.log("📥 Action:", action);
+
+    let screenData = {
+      version: "3.0",
+      screen: "APPOINTMENT",
+      data: {}
+    };
+
+    // 3. Application Logic
+    if (action === "INIT" || !action) {
+      screenData.data = {
+        date_options: getNext7Days(),
+        time_options: [],
+        is_time_enabled: false
+      };
+    } else if (action === "date_selected" || action === "data_exchange") {
+      screenData.data = {
+        time_options: [
+            { id: "11:30 AM", title: "11:30 AM", enabled: true },
+            { id: "12:00 PM", title: "12:00 PM", enabled: true },
+            { id: "04:00 PM", title: "04:00 PM", enabled: true }
+        ],
+        is_time_enabled: true
+      };
+    } else if (action === "complete_booking") {
+      screenData.data = { success: true };
     }
 
-    try {
-        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+    // 4. Encrypt and Send
+    const encryptedRes = encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer);
+    res.setHeader("Content-Type", "text/plain");
+    return res.send(encryptedRes);
 
-        const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 RECEIVED ACTION:", data.action);
-
-        // ... baki nu logic (INIT, data_exchange) same rahese ...
-        
-        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
-        // Tamaru dynamic logic ahiya aavse (date_options, etc.)
-
-        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
-        res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptedRes);
-
-    } catch (error) {
-        console.error("❌ ERROR:", error.message);
-        return res.status(200).send("Endpoint active");
-    }
+  } catch (error) {
+    console.error("❌ Error:", error.message);
+    // Error vakhate pan 200 moklavu better chhe Health Check mate
+    return res.status(200).send("Endpoint Active");
+  }
 });
-app.listen(PORT, () => console.log(`🚀 Live on ${PORT}`));
+
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}!`));
