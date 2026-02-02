@@ -6,7 +6,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// ✅ Tamari PKCS#8 formatted Private Key (Full nakhjo)
+// ✅ Standard Private Key Format
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -36,7 +36,7 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-// --- 🔓 Decryption Function (Missing in your current logs) ---
+// --- 🔓 Decryption Logic (As per Meta Doc) ---
 function decryptRequest(body) {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
     const aesKey = crypto.privateDecrypt(
@@ -52,21 +52,20 @@ function decryptRequest(body) {
     return { data: JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8")), aesKey, iv: ivBuffer };
 }
 
-// --- 🔒 Encryption Function ---
+// --- 🔒 Encryption Logic (As per Meta Doc) ---
 function encryptResponse(data, aesKey, iv) {
     const flippedIv = Buffer.from(iv.map((b) => ~b));
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// --- 📅 Dynamic Data Generators ---
+// --- 📅 Data Generators ---
 const getNext7Days = () => {
     const days = [];
     for (let i = 0; i < 7; i++) {
         const d = new Date();
         d.setDate(d.getDate() + i);
-        const dateStr = d.toISOString().split('T')[0];
-        days.push({ id: dateStr, title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
+        days.push({ id: d.toISOString().split('T')[0], title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
     }
     return days;
 };
@@ -83,14 +82,19 @@ const getTimeSlots = () => {
 // --- 🚀 Main Endpoint ---
 app.post("/flow", (req, res) => {
     try {
-        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+        // 1. Meta Health Check (Unencrypted)
+        if (req.body.action === "ping") {
+            return res.status(200).json({ data: { status: "active" } });
+        }
 
-        // 🛠️ Have 'decryptRequest' properly call thase
+        // 2. Flow Data Decryption
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
         const { data, aesKey, iv } = decryptRequest(req.body);
         console.log("📥 RECEIVED ACTION:", data.action);
 
         let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
+        // 3. Logic Handling
         if (data.action === "INIT" || data.action === "ping" || !data.action) {
             responseBody.data = { date_options: getNext7Days(), time_options: [], is_time_enabled: false };
         } 
@@ -101,14 +105,14 @@ app.post("/flow", (req, res) => {
             responseBody.data = { success: true };
         }
 
+        // 4. Encrypt and Send with Plain Text Header (Important!)
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
 
     } catch (error) {
-        console.error("❌ Decryption ERROR:", error.message);
-        // Meta health check ne 200 return karo jethi Status 421 na aave
-        return res.status(200).send("Health check bypass");
+        console.error("❌ ERROR:", error.message);
+        return res.status(200).json({ data: { status: "error", message: error.message } });
     }
 });
 
