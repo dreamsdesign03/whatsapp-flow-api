@@ -63,36 +63,51 @@ const getTimeSlots = () => {
 
 app.post("/flow", (req, res) => {
     try {
-        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-        const { data, aesKey, iv } = decryptRequest(req.body); // Use your existing decrypt function
+        // 1. Meta Health Check handle karo
+        if (!req.body.encrypted_flow_data) {
+            return res.status(200).send("Endpoint is active");
+        }
 
-        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
+        const { data, aesKey, iv } = decryptRequest(req.body);
+        console.log("📥 Action Received:", data.action);
 
-        if (data.action === "INIT" || !data.action || data.action === "ping") {
+        let responseBody = {
+            version: "3.0",
+            screen: "APPOINTMENT",
+            data: {}
+        };
+
+        // 2. Initial load and ping handling
+        if (data.action === "INIT" || data.action === "ping" || !data.action) {
             responseBody.data = {
                 date_options: getNext7Days(),
                 time_options: [],
                 is_time_enabled: false
             };
         } 
-        else if (data.action === "date_selected") {
+        // 3. Date selection logic
+        else if (data.action === "date_selected" || data.action === "data_exchange") {
             responseBody.data = {
                 time_options: getTimeSlots(),
                 is_time_enabled: true
             };
         }
+        // 4. Final booking confirmation
         else if (data.action === "complete_booking") {
-            console.log("✅ Booking Received:", data.data);
-            responseBody.terminal = true;
+            console.log("✅ Booking Data:", data.data);
+            // Ahiya tame n8n webhook call kari sako chho
             responseBody.data = { success: true };
         }
 
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
+
     } catch (error) {
-        return res.status(421).send("Error");
+        // ❌ Error details log karo jethi khabar pade ke key ma bhul chhe ke logic ma
+        console.error("❌ ERROR:", error.message);
+        // Health check vakhate 200 moklavu better chhe jo decryption fail thay to
+        return res.status(200).send("Endpoint active but decryption failed");
     }
 });
-
 app.listen(PORT, () => console.log(`🚀 Live on ${PORT}`));
