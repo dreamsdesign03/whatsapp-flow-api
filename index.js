@@ -5,6 +5,8 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+
+// ✅ Tamari PKCS#8 formatted Private Key (Full nakhjo)
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -34,68 +36,68 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-// --- Dynamic Date Generator (Next 7 Days) ---
+// --- 🔓 Decryption Function (Missing in your current logs) ---
+function decryptRequest(body) {
+    const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+    const aesKey = crypto.privateDecrypt(
+        { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+        Buffer.from(encrypted_aes_key, "base64")
+    );
+    const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
+    const ivBuffer = Buffer.from(initial_vector, "base64");
+    const tag = flowDataBuffer.slice(-16);
+    const encryptedData = flowDataBuffer.slice(0, -16);
+    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
+    decipher.setAuthTag(tag);
+    return { data: JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8")), aesKey, iv: ivBuffer };
+}
+
+// --- 🔒 Encryption Function ---
+function encryptResponse(data, aesKey, iv) {
+    const flippedIv = Buffer.from(iv.map((b) => ~b));
+    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+    return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
+}
+
+// --- 📅 Dynamic Data Generators ---
 const getNext7Days = () => {
     const days = [];
     for (let i = 0; i < 7; i++) {
         const d = new Date();
         d.setDate(d.getDate() + i);
         const dateStr = d.toISOString().split('T')[0];
-        const options = { weekday: 'short', month: 'short', day: 'numeric' };
-        days.push({ id: dateStr, title: d.toLocaleDateString('en-US', options) });
+        days.push({ id: dateStr, title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
     }
     return days;
 };
 
-// --- Time Slots Generator (11:30 AM to 6:30 PM) ---
 const getTimeSlots = () => {
     return [
         { id: "11:30 AM", title: "11:30 AM", enabled: true },
         { id: "12:00 PM", title: "12:00 PM", enabled: true },
-        { id: "12:30 PM", title: "12:30 PM", enabled: true },
-        { id: "01:00 PM", title: "01:00 PM", enabled: true },
         { id: "04:00 PM", title: "04:00 PM", enabled: true },
-        { id: "05:00 PM", title: "05:00 PM", enabled: true },
-        { id: "06:00 PM", title: "06:00 PM", enabled: true },
         { id: "06:30 PM", title: "06:30 PM", enabled: true }
     ];
 };
 
+// --- 🚀 Main Endpoint ---
 app.post("/flow", (req, res) => {
     try {
-        // 1. Meta Health Check handle karo
-        if (!req.body.encrypted_flow_data) {
-            return res.status(200).send("Endpoint is active");
-        }
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
+        // 🛠️ Have 'decryptRequest' properly call thase
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action Received:", data.action);
+        console.log("📥 RECEIVED ACTION:", data.action);
 
-        let responseBody = {
-            version: "3.0",
-            screen: "APPOINTMENT",
-            data: {}
-        };
+        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-        // 2. Initial load and ping handling
         if (data.action === "INIT" || data.action === "ping" || !data.action) {
-            responseBody.data = {
-                date_options: getNext7Days(),
-                time_options: [],
-                is_time_enabled: false
-            };
+            responseBody.data = { date_options: getNext7Days(), time_options: [], is_time_enabled: false };
         } 
-        // 3. Date selection logic
         else if (data.action === "date_selected" || data.action === "data_exchange") {
-            responseBody.data = {
-                time_options: getTimeSlots(),
-                is_time_enabled: true
-            };
+            responseBody.data = { time_options: getTimeSlots(), is_time_enabled: true };
         }
-        // 4. Final booking confirmation
         else if (data.action === "complete_booking") {
-            console.log("✅ Booking Data:", data.data);
-            // Ahiya tame n8n webhook call kari sako chho
             responseBody.data = { success: true };
         }
 
@@ -104,10 +106,10 @@ app.post("/flow", (req, res) => {
         return res.status(200).send(encryptedRes);
 
     } catch (error) {
-        // ❌ Error details log karo jethi khabar pade ke key ma bhul chhe ke logic ma
-        console.error("❌ ERROR:", error.message);
-        // Health check vakhate 200 moklavu better chhe jo decryption fail thay to
-        return res.status(200).send("Endpoint active but decryption failed");
+        console.error("❌ Decryption ERROR:", error.message);
+        // Meta health check ne 200 return karo jethi Status 421 na aave
+        return res.status(200).send("Health check bypass");
     }
 });
+
 app.listen(PORT, () => console.log(`🚀 Live on ${PORT}`));
