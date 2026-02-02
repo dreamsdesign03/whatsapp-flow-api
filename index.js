@@ -4,9 +4,8 @@ import crypto from "crypto";
 const app = express();
 app.use(express.json());
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
-/* 🔐 PRIVATE KEY (Meta se jo generate ki ho) */
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -36,7 +35,7 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-/* 🔓 Decrypt */
+// 🔐 DECRYPT
 function decrypt(body) {
   const aesKey = crypto.privateDecrypt(
     {
@@ -47,93 +46,104 @@ function decrypt(body) {
     Buffer.from(body.encrypted_aes_key, "base64")
   );
 
-  const flowData = Buffer.from(body.encrypted_flow_data, "base64");
   const iv = Buffer.from(body.initial_vector, "base64");
+  const encrypted = Buffer.from(body.encrypted_flow_data, "base64");
 
-  const encrypted = flowData.slice(0, -16);
-  const tag = flowData.slice(-16);
+  const tag = encrypted.slice(-16);
+  const data = encrypted.slice(0, -16);
 
   const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, iv);
   decipher.setAuthTag(tag);
 
   const decrypted = Buffer.concat([
-    decipher.update(encrypted),
+    decipher.update(data),
     decipher.final()
-  ]).toString();
+  ]);
 
-  return { data: JSON.parse(decrypted), aesKey, iv };
+  return { payload: JSON.parse(decrypted), aesKey, iv };
 }
 
-/* 🔒 Encrypt */
-function encrypt(data, aesKey, iv) {
-  const flippedIv = Buffer.from(iv.map(b => ~b));
-  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+// 🔐 ENCRYPT
+function encrypt(payload, aesKey, iv) {
+  const flippedIV = Buffer.from(iv.map(b => ~b));
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIV);
 
-  return Buffer.concat([
-    cipher.update(JSON.stringify(data)),
-    cipher.final(),
-    cipher.getAuthTag()
-  ]).toString("base64");
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload)),
+    cipher.final()
+  ]);
+
+  return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 }
 
-/* 📅 DATA */
-const dates = [
-  { id: "2026-01-31", title: "Sat, Jan 31" },
-  { id: "2026-02-01", title: "Sun, Feb 1" }
-];
-
-const times = [
-  { id: "10:00", title: "10:00 AM", enabled: true },
-  { id: "11:00", title: "11:00 AM", enabled: true }
-];
-
-/* 🚀 FLOW ENDPOINT */
 app.post("/flow", (req, res) => {
-  if (!req.body.encrypted_flow_data) return res.send("OK");
+  try {
+    if (!req.body.encrypted_flow_data) return res.sendStatus(200);
 
-  const { data, aesKey, iv } = decrypt(req.body);
-  console.log("FLOW:", data);
+    const { payload, aesKey, iv } = decrypt(req.body);
+    console.log("FLOW:", payload);
 
-  /* INITIAL LOAD */
-  if (!data.action) {
-    return res.send(
-      encrypt(
-        {
-          data: {
-            date_options: dates,
-            time_options: [],
-            is_time_enabled: false
-          }
-        },
-        aesKey,
-        iv
-      )
-    );
+    // 🟢 HEALTH CHECK
+    if (payload.action === "ping") {
+      return res.send(encrypt({ data: { status: "active" } }, aesKey, iv));
+    }
+
+    // 🟢 INIT → LOAD DATES
+    if (payload.action === "INIT") {
+      return res.send(
+        encrypt(
+          {
+            screen: "APPOINTMENT",
+            data: {
+              date_options: [
+                { id: "2026-02-03", title: "Mon, Feb 3" },
+                { id: "2026-02-04", title: "Tue, Feb 4" }
+              ],
+              time_options: []
+            }
+          },
+          aesKey,
+          iv
+        )
+      );
+    }
+
+    // 🟢 DATE SELECTED → LOAD TIMES
+    if (payload.action === "date_selected") {
+      return res.send(
+        encrypt(
+          {
+            screen: "APPOINTMENT",
+            data: {
+              time_options: [
+                { id: "10:00", title: "10:00 AM" },
+                { id: "12:00", title: "12:00 PM" }
+              ]
+            }
+          },
+          aesKey,
+          iv
+        )
+      );
+    }
+
+    // 🟢 FINAL SUBMIT
+    if (payload.action === "complete_booking") {
+      console.log("BOOKING CONFIRMED:", payload.data);
+      return res.send(
+        encrypt(
+          { screen: "SUCCESS", data: {} },
+          aesKey,
+          iv
+        )
+      );
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error(err);
+    res.sendStatus(421);
   }
-
-  /* DATE SELECTED */
-  if (data.action === "date_selected") {
-    return res.send(
-      encrypt(
-        {
-          data: {
-            time_options: times,
-            is_time_enabled: true
-          }
-        },
-        aesKey,
-        iv
-      )
-    );
-  }
-
-  /* FINAL SUBMIT */
-  if (data.action === "complete_booking") {
-    console.log("✅ BOOKED:", data);
-    return res.send(encrypt({ data: { success: true } }, aesKey, iv));
-  }
-
-  res.send("OK");
 });
 
 app.listen(PORT, () =>
