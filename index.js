@@ -81,39 +81,47 @@ const getTimeSlots = () => {
 
 // --- 🚀 Main Endpoint ---
 app.post("/flow", (req, res) => {
-    try {
-        // 1. Meta Health Check (Unencrypted)
-        if (req.body.action === "ping") {
-            return res.status(200).json({ data: { status: "active" } });
-        }
+    // 1. Meta Health Check: Documentation mujab aa format farajiyat chhe
+    if (req.body.action === "ping") {
+        return res.status(200).json({ data: { status: "active" } });
+    }
 
-        // 2. Flow Data Decryption
+    try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+        
         const { data, aesKey, iv } = decryptRequest(req.body);
         console.log("📥 RECEIVED ACTION:", data.action);
 
         let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-        // 3. Logic Handling
-        if (data.action === "INIT" || data.action === "ping" || !data.action) {
-            responseBody.data = { date_options: getNext7Days(), time_options: [], is_time_enabled: false };
+        // 2. Logic to provide data based on actions
+        if (data.action === "INIT" || !data.action) {
+            responseBody.data = {
+                date_options: getNext7Days(),
+                time_options: [],
+                is_time_enabled: false
+            };
         } 
         else if (data.action === "date_selected" || data.action === "data_exchange") {
-            responseBody.data = { time_options: getTimeSlots(), is_time_enabled: true };
+            responseBody.data = {
+                time_options: getTimeSlots(),
+                is_time_enabled: true
+            };
         }
         else if (data.action === "complete_booking") {
+            // Ahiya booking success terminal response
             responseBody.data = { success: true };
         }
 
-        // 4. Encrypt and Send with Plain Text Header (Important!)
+        // 3. Encrypt and Send with Plain Text Header
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
 
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        return res.status(200).json({ data: { status: "error", message: error.message } });
+        // Decryption fail thay to Meta documentation mujab logic handle karo
+        return res.status(200).send("Endpoint active");
     }
 });
-
 app.listen(PORT, () => console.log(`🚀 Live on ${PORT}`));
