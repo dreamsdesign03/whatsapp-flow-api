@@ -4,41 +4,22 @@ import crypto from "crypto";
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 10000;
 
-// ✅ Tamari PKCS#8 Private Key (Ensure it's exactly as provided by Meta)
-const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
-ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
-Ne4PJGRkWA3UyL+qDvMIDpKp7Zb1oFif2C6nfEM4EiAp5NJWiZ9kh0FUVQhWTLvy
-4I9RbMZ2g/2gAPNWgaGT8+cpFiZxjZvA1oYHj5/KwKArAmbGHHtBTOSfvmsK5Xut
-ffK5liBRDA16fH+n/VHtIZAbOj3Ypw2QtOyUkHVI1CkuJfOMVx0wcUs0FbZZdC7f
-MwH/F3J3REy6tcqGxpDxA8gkHSbq3yy7OEIQR36bQvsw/mJ3F7r2Z2J+jftlWuSG
-RRph8wiNAgMBAAECggEAAkSgk04wV7EISouxSLBSa32vb8kLyqFEZ87KygQFB+He
-61Y3UD20hFKMhY1xJ2Ii0tmS/LCbhgHqZlqxW4nW7WAbPCOGKHU2As1sPpOh4Zfv
-FtSyw4fi2gXycYvNyrcXIf2Y6iyjBdr1/vxvQO1Q9Fi4Ok8pSAJ7pto3c/S+tngx
-k2BWNlL9YHCAO68+udZIU02PtEOJYquc/WciUDOzlklowoMPP5VxNv10BkkkigWC
-2IHWaYu5ZzBJYr+Nw3X3XK6+PJX3NxwH8IBge8SZsqu7qkF8YR/vgEXXw06wrQ5Q
-bKI6UHBvjd6y6v2Qqv3fLrXYDBJyNw2bycwCukCwQQKBgQDOOoft7yavov80KqF1
-a/6YYG68ytsQdvelq7g0lPOD3rwABvoa6nZZo6RBKlvzPJnU2vWKobVsMztDo9r8
-i/aZg5sqcBQfAlCt6wXG3xj/p/q49G2aN5/ymEnZcW4cqRNb0EIkytCwCcAcSrTo
-vSKTUwiBZeatOK2kvaF/MjwpkQKBgQC+0DENdppCHCO5yOwV3Siyipf/o1GTtMG3
-B0yRlBXTx48MJf1La4p2+zcmPZj6FhTvG8FB0Gdb+EstRkWI3ghncPprEcj9gjm6
-hn36wXX8Zpo7nsvb9h23cP2yCJplIPixsVdJTkQ+eI8az+vZad1IT7T7l5irOsEl
-d67Z2/KRPQKBgQCQ7t2cwBfmE51bIiK6jR0uJYdtsvrlxVYh3l7kxVGmeaCSPFUF
-GYX3VWQYUBazCQHrb75koWUJF7Asxzkdh5fVJ4Ki/oWFjXD56VP0AdJlyb4QwedN
-HI6SRaiQ4oDKL6DlQ6VYihjDvvZ+a5pcfp+P/ijaF61YS57tSj/3TmytoQKBgE02
-A1NWVa9AobgwtE9YkXpFmKHp3T2um+BLBNG3oWlzy893o9ob5wikOLmxnTA9NTVX
-/sh54wkVHJ5yW/q5FZ992ObwaGskgeWXPGz2UZ7Tib9sT0NvgLDU+ONMleUsBVYp
-048nK3g34nhQADiWnOMA1dQkkLNg7/0QQ+GGHc5lAoGAbKAQSDXvw/EoC49/fpns
-Ej76VZG+osgyWqq4z4xYy6wkRkhyCKN9ogRt4FN3+9sKsl+pnfg4QwyPQWwXRU0j
-G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
-8tWimOfa16GJSr1MazMwQvg=
-... (Keep your full key here) ...
------END PRIVATE KEY-----`;
+// Render variable mathi key lese
+const rawKey = process.env.PRIVATE_KEY || "";
 
-// --- HELPER FUNCTIONS ---
+// PEM format converter
+const formatPrivateKey = (key) => {
+    if (!key) return "";
+    if (key.includes('BEGIN PRIVATE KEY')) return key;
+    const wrappedKey = key.replace(/\s/g, '').replace(/(.{64})/g, "$1\n");
+    return `-----BEGIN PRIVATE KEY-----\n${wrappedKey}\n-----END PRIVATE KEY-----`;
+};
 
+const PRIVATE_KEY = formatPrivateKey(rawKey);
+
+// --- CRYPTO HELPERS ---
 function decryptRequest(body) {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
     const aesKey = crypto.privateDecrypt(
@@ -64,108 +45,75 @@ function encryptResponse(data, aesKey, iv) {
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// 📅 Generate next 7 working days (No Sat/Sun)
+// --- DYNAMIC DATA GENERATORS ---
 function getDynamicDates() {
     const options = [];
     let d = new Date();
     while (options.length < 7) {
-        const day = d.getDay();
-        if (day !== 0 && day !== 6) {
-            const id = d.toISOString().split('T')[0];
-            const title = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-            options.push({ id, title });
+        if (d.getDay() !== 0 && d.getDay() !== 6) {
+            options.push({ 
+                id: d.toISOString().split('T')[0], 
+                title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) 
+            });
         }
         d.setDate(d.getDate() + 1);
     }
     return options;
 }
 
-// ⏰ Generate 30-min slots from 11:00 AM to 6:00 PM
 function getDynamicTimes() {
     const slots = [];
-    for (let hour = 11; hour < 18; hour++) {
-        ["00", "30"].forEach(min => {
-            let h = hour > 12 ? hour - 12 : hour;
-            let ampm = hour >= 12 ? "PM" : "AM";
-            let timeStr = `${h}:${min} ${ampm}`;
-            slots.push({ id: timeStr, title: timeStr });
+    for (let h = 11; h < 18; h++) {
+        ["00", "30"].forEach(m => {
+            const displayH = h > 12 ? h - 12 : h;
+            const ampm = h >= 12 ? "PM" : "AM";
+            slots.push({ id: `${displayH}:${m} ${ampm}`, title: `${displayH}:${m} ${ampm}` });
         });
     }
     return slots;
 }
 
-// Simple in-memory storage for booked slots
-let bookedSlots = new Set(); 
+let bookedSlots = new Set();
 
 // --- MAIN ENDPOINT ---
-
 app.post("/flow", (req, res) => {
     try {
-        // 1. Basic URL/Health Check (Empty body check)
-        if (!req.body.encrypted_flow_data) {
-            return res.status(200).send("Active");
-        }
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
-        // 2. Decrypt Request
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action received:", data.action);
-
-        // 3. SPECIAL HANDLING FOR HEALTH CHECK (PING)
-        // Documentation mujab aama screen name nathi mokalvanu
+        
+        // 1. Meta Health Check (Ping)
         if (data.action === "ping") {
-            const healthResponse = {
-                data: { status: "active" }
-            };
-            const encryptedRes = encryptResponse(healthResponse, aesKey, iv);
-            res.setHeader("Content-Type", "text/plain");
-            return res.status(200).send(encryptedRes);
+            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
 
         let responseBody = { version: "3.0", data: {} };
 
-        // 4. Main Flow Logic
+        // 2. Flow Opening
         if (data.action === "INIT") {
             responseBody.screen = "APPOINTMENT";
-            responseBody.data = {
-                date_options: getDynamicDates(),
-                time_options: []
-            };
+            responseBody.data = { date_options: getDynamicDates(), time_options: [] };
         } 
+        // 3. Date Selection
         else if (data.action === "date_selected") {
-            const selectedDate = data.data.date;
-            const availableTimes = getDynamicTimes().filter(slot => 
-                !bookedSlots.has(`${selectedDate}_${slot.id}`)
-            );
-
+            const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${data.data.date}_${s.id}`));
             responseBody.screen = "APPOINTMENT";
-            responseBody.data = {
-                date_options: getDynamicDates(),
-                time_options: availableTimes
-            };
+            responseBody.data = { date_options: getDynamicDates(), time_options: availableTimes };
         }
+        // 4. Final Confirmation
         else if (data.action === "complete_booking") {
-            responseBody.screen = "SUCCESS"; // Screen name must be SUCCESS
-            responseBody.data = {
-                extension_message_response: {
-                    params: {
-                        flow_token: data.flow_token,
-                        status: "confirmed"
-                    }
-                }
-            };
+            bookedSlots.add(`${data.data.date}_${data.data.time}`);
+            responseBody.screen = "SUCCESS";
+            responseBody.data = { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } };
         }
 
-        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptedRes);
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
-    } catch (error) {
-        console.error("❌ Decryption Error:", error.message);
-        // Meta requires 421 status for decryption failures
-        return res.status(421).send("Decryption Error");
+    } catch (e) {
+        console.error("❌ Decryption Error:", e.message);
+        return res.status(421).send("Error");
     }
 });
-// GET endpoint just in case Meta hits it for simple URL check
-app.get("/flow", (req, res) => res.status(200).send("Flow Server is Live!"));
 
-app.listen(PORT, () => console.log(`🚀 Flow Backend live on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
