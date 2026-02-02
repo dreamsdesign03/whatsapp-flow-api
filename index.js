@@ -5,8 +5,6 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-
-/* 🔐 PRIVATE KEY (Exactly jem chhe em j rehva dejo) */
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCZtyf1FVm2xG4E
 ws0Bv7KlwLV4Dad+B6/OBGTQS/3bLPPgiD8g1QxzLX5OWjKEtan0/IPomItqAsFU
@@ -36,124 +34,65 @@ G5L3oGfbtlmohW4deH0ZoRpljE/21dqRrxppeSbxjjb1egeesx0z7Y14JF81SvVv
 8tWimOfa16GJSr1MazMwQvg=
 -----END PRIVATE KEY-----`;
 
-/**
- * 🔓 DECRYPT FUNCTION
- */
-function decryptRequest(body) {
-    const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+// --- Dynamic Date Generator (Next 7 Days) ---
+const getNext7Days = () => {
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().split('T')[0];
+        const options = { weekday: 'short', month: 'short', day: 'numeric' };
+        days.push({ id: dateStr, title: d.toLocaleDateString('en-US', options) });
+    }
+    return days;
+};
 
-    // 1. Decrypt AES Key using RSA Private Key
-    const aesKey = crypto.privateDecrypt(
-        {
-            key: PRIVATE_KEY,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: "sha256",
-        },
-        Buffer.from(encrypted_aes_key, "base64")
-    );
+// --- Time Slots Generator (11:30 AM to 6:30 PM) ---
+const getTimeSlots = () => {
+    return [
+        { id: "11:30 AM", title: "11:30 AM", enabled: true },
+        { id: "12:00 PM", title: "12:00 PM", enabled: true },
+        { id: "12:30 PM", title: "12:30 PM", enabled: true },
+        { id: "01:00 PM", title: "01:00 PM", enabled: true },
+        { id: "04:00 PM", title: "04:00 PM", enabled: true },
+        { id: "05:00 PM", title: "05:00 PM", enabled: true },
+        { id: "06:00 PM", title: "06:00 PM", enabled: true },
+        { id: "06:30 PM", title: "06:30 PM", enabled: true }
+    ];
+};
 
-    const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-    const ivBuffer = Buffer.from(initial_vector, "base64");
-
-    // 2. Extract Tag (Last 16 bytes) and Ciphertext
-    const tag = flowDataBuffer.slice(-16);
-    const encryptedData = flowDataBuffer.slice(0, -16);
-
-    // 3. Decrypt Flow Data using AES-GCM
-    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
-    decipher.setAuthTag(tag);
-
-    const decrypted = Buffer.concat([
-        decipher.update(encryptedData),
-        decipher.final(),
-    ]).toString("utf-8");
-
-    return { data: JSON.parse(decrypted), aesKey, iv: ivBuffer };
-}
-
-/**
- * 🔒 ENCRYPT FUNCTION
- */
-function encryptResponse(data, aesKey, iv) {
-    // WhatsApp expectation: Flip bits of the IV for response
-    const flippedIv = Buffer.from(iv.map((b) => ~b));
-    
-    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
-    
-    const ciphertext = Buffer.concat([
-        cipher.update(JSON.stringify(data), "utf8"),
-        cipher.final(),
-        cipher.getAuthTag(),
-    ]);
-
-    return ciphertext.toString("base64");
-}
-
-/* 📅 STATIC DATA */
-const dates = [
-    { id: "2026-01-31", title: "Sat, Jan 31" },
-    { id: "2026-02-01", title: "Sun, Feb 1" }
-];
-
-const times = [
-    { id: "10:00", title: "10:00 AM", enabled: true },
-    { id: "11:00", title: "11:00 AM", enabled: true }
-];
-
-/* 🚀 FLOW ENDPOINT */
 app.post("/flow", (req, res) => {
     try {
-        if (!req.body.encrypted_flow_data) {
-            return res.status(400).send("Missing encrypted data");
-        }
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+        const { data, aesKey, iv } = decryptRequest(req.body); // Use your existing decrypt function
 
-        const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 RECEIVED ACTION:", data.action);
-        console.log("📥 PAYLOAD:", data);
+        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-        let responseBody = {
-            version: "3.0", // Flows Data API Version
-            data: {}
-        };
-
-        // --- logic routing ---
-
-        // 1. Initial Load or Ping
-        if (!data.action || data.action === "ping") {
+        if (data.action === "INIT" || !data.action || data.action === "ping") {
             responseBody.data = {
-                date_options: dates,
+                date_options: getNext7Days(),
                 time_options: [],
                 is_time_enabled: false
             };
         } 
-        // 2. When user selects a date
         else if (data.action === "date_selected") {
             responseBody.data = {
-                time_options: times,
+                time_options: getTimeSlots(),
                 is_time_enabled: true
             };
         }
-        // 3. Final submission
         else if (data.action === "complete_booking") {
-            console.log("✅ SUCCESSFUL BOOKING:", data);
-            responseBody.data = {
-                success: true,
-                message: "Appointment confirmed!"
-            };
+            console.log("✅ Booking Received:", data.data);
+            responseBody.terminal = true;
+            responseBody.data = { success: true };
         }
 
-        // Encrypt the response
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
-
-        // ⚠️ VERY IMPORTANT: Content-Type must be text/plain
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
-
-    } catch (err) {
-        console.error("❌ ERROR:", err.message);
-        // If decryption fails, Meta expects 421
-        return res.status(421).send("Decryption failed");
+    } catch (error) {
+        return res.status(421).send("Error");
     }
 });
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Live on ${PORT}`));
