@@ -101,33 +101,41 @@ let bookedSlots = new Set();
 
 app.post("/flow", (req, res) => {
     try {
-        // 1. Health Check Handling (Important for Meta Verification)
+        // 1. Basic URL/Health Check (Empty body check)
         if (!req.body.encrypted_flow_data) {
-            console.log("✅ Health Check / Verification Received");
             return res.status(200).send("Active");
         }
 
         // 2. Decrypt Request
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action:", data.action, "| Data:", data.data);
+        console.log("📥 Action received:", data.action);
+
+        // 3. SPECIAL HANDLING FOR HEALTH CHECK (PING)
+        // Documentation mujab aama screen name nathi mokalvanu
+        if (data.action === "ping") {
+            const healthResponse = {
+                data: { status: "active" }
+            };
+            const encryptedRes = encryptResponse(healthResponse, aesKey, iv);
+            res.setHeader("Content-Type", "text/plain");
+            return res.status(200).send(encryptedRes);
+        }
 
         let responseBody = { version: "3.0", data: {} };
-        const action = data.action;
 
-        // 3. Logic based on Action
-        if (action === "INIT" || action === "ping") {
+        // 4. Main Flow Logic
+        if (data.action === "INIT") {
             responseBody.screen = "APPOINTMENT";
             responseBody.data = {
                 date_options: getDynamicDates(),
                 time_options: []
             };
         } 
-        else if (action === "date_selected" || (action === "data_exchange" && data.payload?.action === "date_selected")) {
-            const selectedDate = data.data?.date || data.payload?.date;
-            const allTimes = getDynamicTimes();
-            
-            // Filter already booked slots for this date
-            const availableTimes = allTimes.filter(slot => !bookedSlots.has(`${selectedDate}_${slot.id}`));
+        else if (data.action === "date_selected") {
+            const selectedDate = data.data.date;
+            const availableTimes = getDynamicTimes().filter(slot => 
+                !bookedSlots.has(`${selectedDate}_${slot.id}`)
+            );
 
             responseBody.screen = "APPOINTMENT";
             responseBody.data = {
@@ -135,28 +143,28 @@ app.post("/flow", (req, res) => {
                 time_options: availableTimes
             };
         }
-        else if (action === "complete_booking") {
-            const { date, time } = data.data;
-            bookedSlots.add(`${date}_${time}`); // Save booking
-            
-            responseBody.screen = "SUMMARY"; // Stay on summary or navigate to a success screen
-            responseBody.data = { 
-                extension_message_response: { status: "success", message: "Appointment Confirmed!" } 
+        else if (data.action === "complete_booking") {
+            responseBody.screen = "SUCCESS"; // Screen name must be SUCCESS
+            responseBody.data = {
+                extension_message_response: {
+                    params: {
+                        flow_token: data.flow_token,
+                        status: "confirmed"
+                    }
+                }
             };
         }
 
-        // 4. Encrypt and Send Response
         const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(encryptedRes);
 
     } catch (error) {
-        console.error("❌ Encryption/Logic Error:", error.message);
-        // Meta requires 421 for decryption issues
+        console.error("❌ Decryption Error:", error.message);
+        // Meta requires 421 status for decryption failures
         return res.status(421).send("Decryption Error");
     }
 });
-
 // GET endpoint just in case Meta hits it for simple URL check
 app.get("/flow", (req, res) => res.status(200).send("Flow Server is Live!"));
 
