@@ -105,58 +105,68 @@ const getNext7Days = () => {
 };
 
 // --- 🚀 Main Endpoint ---
-app.post("/flow", async (req, res) => {
-  // 1. Meta Health Check (PING) - Documentation Requirement
-  if (req.body.action === "ping") {
-    console.log("✅ Health Check (Ping) Received");
-    return res.status(200).json({ data: { status: "active" } });
-  }
+app.post("/flow", (req, res) => {
 
-  try {
-    if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-
-    // 2. Decrypt Request
-    const { decryptedBody, aesKeyBuffer, initialVectorBuffer } = decryptRequest(req.body, PRIVATE_KEY);
-    const { action, data } = decryptedBody;
-    console.log("📥 Action:", action);
-
-    let screenData = {
+  // ✅ Health check
+  if (
+    req.body.version === "3.0" &&
+    !req.body.encrypted_flow_data
+  ) {
+    return res.json({
       version: "3.0",
       screen: "APPOINTMENT",
       data: {}
-    };
-
-    // 3. Application Logic
-    if (action === "INIT" || !action) {
-      screenData.data = {
-        date_options: getNext7Days(),
-        time_options: [],
-        is_time_enabled: false
-      };
-    } else if (action === "date_selected" || action === "data_exchange") {
-      screenData.data = {
-        time_options: [
-            { id: "11:30 AM", title: "11:30 AM", enabled: true },
-            { id: "12:00 PM", title: "12:00 PM", enabled: true },
-            { id: "04:00 PM", title: "04:00 PM", enabled: true }
-        ],
-        is_time_enabled: true
-      };
-    } else if (action === "complete_booking") {
-      screenData.data = { success: true };
-    }
-
-    // 4. Encrypt and Send
-    const encryptedRes = encryptResponse(screenData, aesKeyBuffer, initialVectorBuffer);
-    res.setHeader("Content-Type", "text/plain");
-    return res.send(encryptedRes);
-
-  } catch (error) {
-    console.error("❌ Error:", error.message);
-    // Error vakhate pan 200 moklavu better chhe Health Check mate
-    return res.status(200).send("Endpoint Active");
+    });
   }
+
+  if (!req.body.encrypted_flow_data) {
+    return res.send("OK");
+  }
+
+  const { data, aesKey, iv } = decrypt(req.body);
+  console.log("FLOW:", data);
+
+  if (!data.action) {
+    return res.send(
+      encrypt(
+        {
+          data: {
+            date_options: dates,
+            time_options: [],
+            is_time_enabled: false
+          }
+        },
+        aesKey,
+        iv
+      )
+    );
+  }
+
+  if (data.action === "date_selected") {
+    return res.send(
+      encrypt(
+        {
+          data: {
+            time_options: times,
+            is_time_enabled: true
+          }
+        },
+        aesKey,
+        iv
+      )
+    );
+  }
+
+  if (data.action === "complete_booking") {
+    console.log("✅ BOOKED:", data);
+    return res.send(
+      encrypt({ data: { success: true } }, aesKey, iv)
+    );
+  }
+
+  res.send("OK");
 });
+
 
 app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}!`));
 
