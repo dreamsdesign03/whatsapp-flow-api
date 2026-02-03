@@ -112,15 +112,17 @@ app.post("/flow", (req, res) => {
     // 3️⃣ Date selected - Load times
     // 3️⃣ Date/Time BOTH selected - Navigate to DETAILS (🚨 MAIN FIX)
     else if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
-      const selectedDate = data.date || (data.data && data.data.date);
-      const selectedTime = data.time || (data.data && data.data.time);
+      let selectedDate = data.date || (data.data && data.data.date);
+      let selectedTime = data.time || (data.data && data.time);
       
       console.log("📅 Selected Date:", selectedDate);
       console.log("🕒 Selected Time:", selectedTime);
     
-      // Date + Time both selected = Go to DETAILS
+      // ✅ BOTH Date + Time selected = Go to DETAILS
       if (selectedDate && selectedTime) {
         bookedSlots.add(`${selectedDate}_${selectedTime}`);
+        console.log("✅ Date+Time VALID → Navigating to DETAILS");
+        
         responseBody.screen = "DETAILS";
         responseBody.data = {
           date: selectedDate,
@@ -128,17 +130,17 @@ app.post("/flow", (req, res) => {
         };
       } 
   // Only date = Load times (existing logic)
-  else if (selectedDate) {
-    const availableTimes = getDynamicTimes().filter(
-      (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-    );
-    responseBody.screen = "APPOINTMENT";
-    responseBody.data = {
-      date_options: getDynamicDates(),
-      time_options: availableTimes
-    };
-  }
-}
+      else if (selectedDate && !selectedTime) {
+        console.log("⏳ Only Date → Loading Times");
+        const availableTimes = getDynamicTimes().filter(
+          (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
+        );
+        responseBody.screen = "APPOINTMENT";
+        responseBody.data = {
+          date_options: getDynamicDates(),
+          time_options: availableTimes
+        };
+      }
     // 4️⃣ DETAILS → SUMMARY navigation (🚨 MAIN FIX)
     else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
       const detailsData = data.payload || {};  // ✅ FIXED: Declare first
@@ -173,7 +175,14 @@ app.post("/flow", (req, res) => {
         }
       };
     }
-
+    else {
+        responseBody.data = {
+          date_options: getDynamicDates(),
+          time_options: getDynamicTimes()
+        };
+      }
+    }
+            
     res.setHeader("Content-Type", "text/plain");
     return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
