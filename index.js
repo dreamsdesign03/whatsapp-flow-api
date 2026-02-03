@@ -74,15 +74,16 @@ let bookedSlots = new Set();
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Received Action:", data.action);
+        
+        // logs ma detail jova mate aa line add karo
+        console.log("📥 Full Data received:", JSON.stringify(data, null, 2));
 
         if (data.action === "ping") {
             return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
 
-        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
+        let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
 
         if (data.action === "INIT") {
             responseBody.data = { date_options: getDynamicDates(), time_options: [] };
@@ -92,19 +93,16 @@ app.post("/flow", (req, res) => {
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             responseBody.data = { date_options: getDynamicDates(), time_options: availableTimes };
         }
-        else if (data.action === "complete_booking") {
-            const { date, time, name, phone } = data.data;
-            bookedSlots.add(`${date}_${time}`);
-            
-            // 🚀 Ahiya tame booking details print kari shako cho
-            console.log(`✅ BOOKING CONFIRMED: ${name} (${phone}) for ${date} at ${time}`);
+        else if (data.action === "complete_booking" || data.action === "data_exchange") {
+            // Check karo ke kayi screen mathi request avi che
+            if (data.screen === "SUMMARY") {
+                const { date, time, name, phone } = data.data;
+                bookedSlots.add(`${date}_${time}`);
+                console.log(`✅ BOOKING SAVED: ${name} (${phone})`);
 
-            responseBody.screen = "SUCCESS";
-            responseBody.data = { 
-                extension_message_response: { 
-                    params: { flow_token: data.flow_token, status: "success", booked_name: name } 
-                } 
-            };
+                responseBody.screen = "SUCCESS";
+                responseBody.data = { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } };
+            }
         }
 
         res.setHeader("Content-Type", "text/plain");
