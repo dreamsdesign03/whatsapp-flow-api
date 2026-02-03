@@ -110,24 +110,24 @@ app.post("/flow", (req, res) => {
       };
     }
 
-    // 3️⃣ NAVIGATE (🔥 MUST BE BEFORE data_exchange 🔥)
-    else if (data.action === "navigate") {
-      const payload = data.data || {};
-
-      console.log("➡️ Navigate to SUMMARY:", payload);
-
+    else if (data.action === "go_to_summary") {
+      const payload = data.data || data;
+    
+      console.log("➡️ Go to SUMMARY payload:", payload);
+    
       responseBody = {
         version: "3.0",
         screen: "SUMMARY",
         data: {
-          name: payload.name || "",
-          phone: payload.phone || "",
-          date: payload.date || "",
-          time: payload.time || ""
+          name: payload.name,
+          phone: payload.phone,
+          date: payload.date,
+          time: payload.time
         }
       };
     }
 
+    
     // 4️⃣ Date selected / data exchange (time loading)
     else if (data.action === "date_selected" || data.action === "data_exchange") {
       const selectedDate = data.date || (data.data && data.data.date);
