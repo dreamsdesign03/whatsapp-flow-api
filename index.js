@@ -128,10 +128,15 @@ app.post("/flow", (req, res) => {
             
             console.log(`✅ Booking Confirmed: ${bookingData.name}`);
 
-            responseBody.screen = "SUMMARY";
-            responseBody.data = {
-                extension_message_response: {
-                    params: { flow_token: data.flow_token, status: "success" }
+            // FIX: Terminal response for success
+            responseBody = {
+                version: "3.0",
+                type: "TERMINATE",
+                screen: "SUMMARY",
+                data: {
+                    extension_message_response: {
+                        params: { flow_token: data.flow_token, status: "success" }
+                    }
                 }
             };
         }
