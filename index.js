@@ -83,50 +83,45 @@ app.post("/flow", (req, res) => {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Decrypted Data:", JSON.stringify(data, null, 2));
+        
+        // 1. PING / HEALTH CHECK LOGIC (Aa tame select karel "Expected Result" mate che)
+        if (data.action === "ping") {
+            const pingResponse = {
+                data: {
+                    status: "active"
+                }
+            };
+            console.log("✅ Ping Received - Sending Active Status");
+            return res.status(200).send(encryptResponse(pingResponse, aesKey, iv));
+        }
 
-        // Version 3.0 mujab response structure
+        // 2. REGULAR FLOW LOGIC (INIT, date_selected, etc.)
         let responseBody = { 
             version: "3.0", 
-            screen: data.screen || "APPOINTMENT", // Hamesha screen id moklavu
+            screen: data.screen || "APPOINTMENT", 
             data: {} 
         };
 
-        // 1. Initial Load logic
         if (data.action === "INIT") {
-            responseBody.screen = "APPOINTMENT";
             responseBody.data = { 
                 date_options: getDynamicDates(), 
                 time_options: [] 
             };
         } 
-        
-        // 2. Date Selection (on-select-action)
         else if (data.action === "date_selected") {
-            // FIX: data.date root mathi lese, data.data mathi nahi
-            const selectedDate = data.date; 
+            const selectedDate = data.date || (data.data && data.data.date);
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             
-            responseBody.screen = "APPOINTMENT";
             responseBody.data = {
                 date_options: getDynamicDates(),
                 time_options: availableTimes
             };
         }
-
-        // 3. Final Booking logic
         else if (data.action === "complete_booking") {
-            const { date, time, name, phone } = data;
-            bookedSlots.add(`${date}_${time}`);
-            
-            // SUMMARY screen na confirmation mate
             responseBody.screen = "SUMMARY";
             responseBody.data = {
                 extension_message_response: {
-                    params: {
-                        flow_token: data.flow_token,
-                        status: "success"
-                    }
+                    params: { flow_token: data.flow_token, status: "success" }
                 }
             };
         }
