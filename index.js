@@ -129,6 +129,19 @@ app.post("/flow", (req, res) => {
       };
     }
 
+    else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
+      console.log("Booking Confirmed:", detailsData);
+      const detailsData = data.payload || {};
+        console.log("✅ Booking Confirmed:", detailsData);
+      responseBody.screen = "SUMMARY";
+      responseBody.data = {
+        name: detailsData.name || "",
+        phone: detailsData.phone || "",
+        date: detailsData.date || "",
+        time: detailsData.time || ""
+      };
+    }
+
     // 5️⃣ Final booking
     else if (data.action === "complete_booking") {
       const bookingData = data.data || data;
