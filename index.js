@@ -1,3 +1,4 @@
+
 import express from "express";
 import crypto from "crypto";
 
@@ -91,22 +92,14 @@ app.post("/flow", (req, res) => {
 
     // 1️⃣ Ping
     if (data.action === "ping") {
-      return res.status(200).send(
-        encryptResponse(
-          {
-            version: "3.0",
-            data: { status: "active" }
-          },
-          aesKey,
-          iv
-        )
-      );
+      return res
+        .status(200)
+        .send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
-
 
     let responseBody = {
       version: "3.0",
-      screen: data.screen,
+      screen: data.screen || "APPOINTMENT",
       data: {}
     };
 
@@ -120,7 +113,7 @@ app.post("/flow", (req, res) => {
 
 
     // 4️⃣ Date selected / data exchange (time loading)
-    else if (data.action === "date_selected") {
+    else if (data.action === "date_selected" || data.action === "data_exchange") {
       const selectedDate = data.date || (data.data && data.data.date);
 
       console.log("📅 Selected Date:", selectedDate);
