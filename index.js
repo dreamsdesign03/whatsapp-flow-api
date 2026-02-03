@@ -80,79 +80,56 @@ let bookedSlots = new Set();
 
 app.post("/flow", (req, res) => {
   try {
+    // 🔹 Health check
     if (!req.body.encrypted_flow_data) {
       return res.status(200).send("Active");
     }
 
     const { data, aesKey, iv } = decryptRequest(req.body);
 
-    console.log("📥 Action Received:", data.action);
-    console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
+    console.log("📥 Action:", data.action);
+    console.log("📥 Screen:", data.screen);
+    console.log("📥 Data:", JSON.stringify(data, null, 2));
 
-    // 1️⃣ Ping
-    if (data.action === "ping") {
-      return res
-        .status(200)
-        .send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-    }
-
-    let responseBody = {
+    let response = {
       version: "3.0",
-      screen: data.screen || "APPOINTMENT",
+      screen: data.screen,
       data: {}
     };
 
-    // 2️⃣ INIT
-    if (data.action === "INIT") {
-      responseBody.data = {
+    /* ===================== PING ===================== */
+    if (data.action === "ping") {
+      response.data = { status: "active" };
+    }
+
+    /* ===================== INIT ===================== */
+    else if (data.action === "INIT") {
+      response.screen = "APPOINTMENT";
+      response.data = {
         date_options: getDynamicDates(),
         time_options: []
       };
     }
 
-    else if (data.action === "go_to_summary") {
-      const payload = data.data || data;
-    
-      console.log("➡️ Go to SUMMARY payload:", payload);
-    
-      responseBody = {
-        version: "3.0",
-        screen: "SUMMARY",
-        data: {
-          name: payload.name,
-          phone: payload.phone,
-          date: payload.date,
-          time: payload.time
-        }
-      };
-    }
-
-    
-    // 4️⃣ Date selected / data exchange (time loading)
-    else if (data.action === "date_selected" || data.action === "data_exchange") {
-      const selectedDate = data.date || (data.data && data.data.date);
-
-      console.log("📅 Selected Date:", selectedDate);
-
-      const availableTimes = getDynamicTimes().filter(
-        (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-      );
-
-      responseBody.screen = "APPOINTMENT";
-      responseBody.data = {
+    /* ===================== DATE SELECT ===================== */
+    else if (data.action === "date_selected") {
+      response.screen = "APPOINTMENT";
+      response.data = {
         date_options: getDynamicDates(),
-        time_options: availableTimes
+        time_options: getDynamicTimes()
       };
     }
 
-    // 5️⃣ Final booking
+    /* ===================== FINAL CONFIRM ===================== */
     else if (data.action === "complete_booking") {
-      const bookingData = data.data || data;
+      console.log("✅ FINAL BOOKING:", {
+        name: data.name,
+        phone: data.phone,
+        date: data.date,
+        time: data.time
+      });
 
-      bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
-      console.log("✅ Booking Confirmed:", bookingData);
-
-      responseBody = {
+      response = {
         version: "3.0",
         type: "TERMINATE",
         screen: "SUMMARY",
@@ -168,12 +145,12 @@ app.post("/flow", (req, res) => {
     }
 
     res.setHeader("Content-Type", "text/plain");
-    return res
-      .status(200)
-      .send(encryptResponse(responseBody, aesKey, iv));
+    return res.status(200).send(
+      encryptResponse(response, aesKey, iv)
+    );
 
-  } catch (error) {
-    console.error("❌ ERROR:", error);
+  } catch (err) {
+    console.error("❌ FLOW ERROR:", err);
     return res.status(421).send("Error");
   }
 });
