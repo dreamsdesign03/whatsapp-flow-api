@@ -80,56 +80,62 @@ let bookedSlots = new Set();
 
 app.post("/flow", (req, res) => {
   try {
-    // 🔹 Health check
     if (!req.body.encrypted_flow_data) {
       return res.status(200).send("Active");
     }
 
     const { data, aesKey, iv } = decryptRequest(req.body);
 
-    console.log("📥 Action:", data.action);
-    console.log("📥 Screen:", data.screen);
-    console.log("📥 Data:", JSON.stringify(data, null, 2));
+    console.log("📥 Action Received:", data.action);
+    console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
 
-    let response = {
+    // 1️⃣ Ping
+    if (data.action === "ping") {
+      return res
+        .status(200)
+        .send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
+    }
+
+    let responseBody = {
       version: "3.0",
-      screen: data.screen,
+      screen: data.screen || "APPOINTMENT",
       data: {}
     };
 
-    /* ===================== PING ===================== */
-    if (data.action === "ping") {
-      response.data = { status: "active" };
-    }
-
-    /* ===================== INIT ===================== */
-    else if (data.action === "INIT") {
-      response.screen = "APPOINTMENT";
-      response.data = {
+    // 2️⃣ INIT
+    if (data.action === "INIT") {
+      responseBody.data = {
         date_options: getDynamicDates(),
         time_options: []
       };
     }
 
-    /* ===================== DATE SELECT ===================== */
-    else if (data.action === "date_selected") {
-      response.screen = "APPOINTMENT";
-      response.data = {
+
+    // 4️⃣ Date selected / data exchange (time loading)
+    else if (data.action === "date_selected" || data.action === "data_exchange") {
+      const selectedDate = data.date || (data.data && data.data.date);
+
+      console.log("📅 Selected Date:", selectedDate);
+
+      const availableTimes = getDynamicTimes().filter(
+        (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
+      );
+
+      responseBody.screen = "APPOINTMENT";
+      responseBody.data = {
         date_options: getDynamicDates(),
-        time_options: getDynamicTimes()
+        time_options: availableTimes
       };
     }
 
-    /* ===================== FINAL CONFIRM ===================== */
+    // 5️⃣ Final booking
     else if (data.action === "complete_booking") {
-      console.log("✅ FINAL BOOKING:", {
-        name: data.name,
-        phone: data.phone,
-        date: data.date,
-        time: data.time
-      });
+      const bookingData = data.data || data;
 
-      response = {
+      bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
+      console.log("✅ Booking Confirmed:", bookingData);
+
+      responseBody = {
         version: "3.0",
         type: "TERMINATE",
         screen: "SUMMARY",
@@ -145,15 +151,19 @@ app.post("/flow", (req, res) => {
     }
 
     res.setHeader("Content-Type", "text/plain");
-    return res.status(200).send(
-      encryptResponse(response, aesKey, iv)
-    );
+    return res
+      .status(200)
+      .send(encryptResponse(responseBody, aesKey, iv));
 
-  } catch (err) {
-    console.error("❌ FLOW ERROR:", err);
+  } catch (error) {
+    console.error("❌ ERROR:", error);
     return res.status(421).send("Error");
   }
 });
+
+ 
+
+
 
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
