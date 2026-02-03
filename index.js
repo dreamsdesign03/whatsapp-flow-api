@@ -83,41 +83,51 @@ app.post("/flow", (req, res) => {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
         const { data, aesKey, iv } = decryptRequest(req.body);
-        
-        // 1. PING / HEALTH CHECK LOGIC (Aa tame select karel "Expected Result" mate che)
+        console.log("📥 Action Received:", data.action);
+        console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
+
+        // 1. Meta Health Check (Ping) - Aa verified rehva mate jaruri che
         if (data.action === "ping") {
-            const pingResponse = {
-                data: {
-                    status: "active"
-                }
-            };
-            console.log("✅ Ping Received - Sending Active Status");
-            return res.status(200).send(encryptResponse(pingResponse, aesKey, iv));
+            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
 
-        // 2. REGULAR FLOW LOGIC (INIT, date_selected, etc.)
         let responseBody = { 
             version: "3.0", 
             screen: data.screen || "APPOINTMENT", 
             data: {} 
         };
 
+        // 2. Initial Data Load
         if (data.action === "INIT") {
             responseBody.data = { 
                 date_options: getDynamicDates(), 
                 time_options: [] 
             };
         } 
-        else if (data.action === "date_selected") {
+        
+        // 3. Date Selection Logic - Robust Data Access
+        else if (data.action === "date_selected" || data.action === "data_exchange") {
+            // FIX: Aa line badha data formats handle karse
             const selectedDate = data.date || (data.data && data.data.date);
+            
+            console.log("📅 Selected Date for filtering:", selectedDate);
+
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             
+            responseBody.screen = "APPOINTMENT"; 
             responseBody.data = {
                 date_options: getDynamicDates(),
                 time_options: availableTimes
             };
         }
+
+        // 4. Final Booking Logic
         else if (data.action === "complete_booking") {
+            const bookingData = data.data || data;
+            bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
+            
+            console.log(`✅ Booking Confirmed: ${bookingData.name}`);
+
             responseBody.screen = "SUMMARY";
             responseBody.data = {
                 extension_message_response: {
