@@ -5,8 +5,11 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
+
+// Render variable mathi key lese
 const rawKey = process.env.PRIVATE_KEY || "";
 
+// PEM format converter
 const formatPrivateKey = (key) => {
     if (!key) return "";
     if (key.includes('BEGIN PRIVATE KEY')) return key;
@@ -16,6 +19,7 @@ const formatPrivateKey = (key) => {
 
 const PRIVATE_KEY = formatPrivateKey(rawKey);
 
+// --- CRYPTO HELPERS ---
 function decryptRequest(body) {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
     const aesKey = crypto.privateDecrypt(
@@ -41,7 +45,7 @@ function encryptResponse(data, aesKey, iv) {
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// Logic for Dynamic Dates (Excluding Weekends)
+// --- DYNAMIC DATA GENERATORS ---
 function getDynamicDates() {
     const options = [];
     let d = new Date();
@@ -57,7 +61,6 @@ function getDynamicDates() {
     return options;
 }
 
-// Logic for Dynamic Times
 function getDynamicTimes() {
     const slots = [];
     for (let h = 11; h < 18; h++) {
@@ -72,66 +75,68 @@ function getDynamicTimes() {
 
 let bookedSlots = new Set();
 
+// --- MAIN ENDPOINT ---
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-        
+
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Decrypted Data:", JSON.stringify(data, null, 2));
+        console.log("📥 Action:", data.action);
 
-        let responseBody = { version: "3.0", screen: data.screen, data: {} };
+        // 1. HEALTH CHECK (PING)
+        if (data.action === "ping") {
+            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
+        }
 
-        // 1. Initial Load (When flow starts)
+        // 2. INITIALIZE RESPONSE STRUCTURE
+        // Document mujab 'screen' property compulsory che top level par
+        let responseBody = { 
+            version: "3.0", 
+            screen: "APPOINTMENT", // Default screen name
+            data: {} 
+        };
+
+        // 3. LOGIC BASED ON ACTION
         if (data.action === "INIT") {
-            responseBody.screen = "APPOINTMENT";
             responseBody.data = { 
                 date_options: getDynamicDates(), 
-                time_options: [] // Start with empty times
+                time_options: [] 
             };
         } 
-        
-        // 2. Date Selection (When user picks a date)
-        else if (data.action === "date_selected") {
-            // FIX: Directly access 'date' from root of data
-            const selectedDate = data.date; 
+        else if (data.action === "date_selected" || data.action === "data_exchange") {
+            // Dropdown select thay tyare screen name hamesha APPOINTMENT rehse
+            const selectedDate = data.data.date;
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             
-            responseBody.screen = "APPOINTMENT";
-            responseBody.data = {
-                date_options: getDynamicDates(), // Retain dates
-                time_options: availableTimes    // Show filtered times
+            responseBody.screen = "APPOINTMENT"; 
+            responseBody.data = { 
+                date_options: getDynamicDates(), 
+                time_options: availableTimes 
             };
         }
-
-        // 3. Final Booking
         else if (data.action === "complete_booking") {
-            const { date, time, name, phone } = data;
+            // FLOW COMPLETION logic as per document
+            const { date, time } = data.data;
             bookedSlots.add(`${date}_${time}`);
-            
-            console.log(`✅ Booking Confirmed for ${name} at ${time} on ${date}`);
 
-            responseBody = {
-                version: "3.0",
-                type: "TERMINATE",
-                screen: "SUMMARY",
-                data: {
-                    extension_message_response: {
-                        params: {
-                            flow_token: data.flow_token,
-                            status: "success"
-                        }
-                    }
-                }
+            responseBody.screen = "SUCCESS"; // Mandatory final screen name
+            responseBody.data = { 
+                extension_message_response: { 
+                    params: { 
+                        flow_token: data.flow_token, 
+                        status: "success" 
+                    } 
+                } 
             };
         }
 
+        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        return res.status(200).send(encryptedRes);
 
     } catch (error) {
         console.error("❌ ERROR:", error.message);
         return res.status(421).send("Error");
     }
 });
-
-app.listen(PORT, () => console.log(`🚀 Flow Server Live on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
