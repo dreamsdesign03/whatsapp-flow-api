@@ -5,7 +5,6 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-
 const rawKey = process.env.PRIVATE_KEY || "";
 
 const formatPrivateKey = (key) => {
@@ -42,6 +41,7 @@ function encryptResponse(data, aesKey, iv) {
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
+// Logic for Dynamic Dates (Excluding Weekends)
 function getDynamicDates() {
     const options = [];
     let d = new Date();
@@ -57,6 +57,7 @@ function getDynamicDates() {
     return options;
 }
 
+// Logic for Dynamic Times
 function getDynamicTimes() {
     const slots = [];
     for (let h = 11; h < 18; h++) {
@@ -74,41 +75,54 @@ let bookedSlots = new Set();
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-        const { data, aesKey, iv } = decryptRequest(req.body);
         
-        // logs ma detail jova mate aa line add karo
-        console.log("📥 Full Data received:", JSON.stringify(data, null, 2));
+        const { data, aesKey, iv } = decryptRequest(req.body);
+        console.log("📥 Decrypted Data:", JSON.stringify(data, null, 2));
 
-        if (data.action === "ping") {
-            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-        }
+        let responseBody = { version: "3.0", screen: data.screen, data: {} };
 
-        let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
-
+        // 1. Initial Load (When flow starts)
         if (data.action === "INIT") {
-            responseBody.data = { date_options: getDynamicDates(), time_options: [] };
+            responseBody.screen = "APPOINTMENT";
+            responseBody.data = { 
+                date_options: getDynamicDates(), 
+                time_options: [] // Start with empty times
+            };
         } 
+        
+        // 2. Date Selection (When user picks a date)
         else if (data.action === "date_selected") {
-            const selectedDate = data.data.date;
+            // FIX: Directly access 'date' from root of data
+            const selectedDate = data.date; 
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             
-            // Aa response hamesha APPOINTMENT screen par j rehse
-            responseBody.screen = "APPOINTMENT"; 
-            responseBody.data = { 
-                date_options: getDynamicDates(), // Pehla dropdown retain karva mate
-                time_options: availableTimes      // Have time dropdown bharase
+            responseBody.screen = "APPOINTMENT";
+            responseBody.data = {
+                date_options: getDynamicDates(), // Retain dates
+                time_options: availableTimes    // Show filtered times
             };
         }
-        else if (data.action === "complete_booking" || data.action === "data_exchange") {
-            // Check karo ke kayi screen mathi request avi che
-            if (data.screen === "SUMMARY") {
-                const { date, time, name, phone } = data.data;
-                bookedSlots.add(`${date}_${time}`);
-                console.log(`✅ BOOKING SAVED: ${name} (${phone})`);
 
-                responseBody.screen = "SUCCESS";
-                responseBody.data = { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } };
-            }
+        // 3. Final Booking
+        else if (data.action === "complete_booking") {
+            const { date, time, name, phone } = data;
+            bookedSlots.add(`${date}_${time}`);
+            
+            console.log(`✅ Booking Confirmed for ${name} at ${time} on ${date}`);
+
+            responseBody = {
+                version: "3.0",
+                type: "TERMINATE",
+                screen: "SUMMARY",
+                data: {
+                    extension_message_response: {
+                        params: {
+                            flow_token: data.flow_token,
+                            status: "success"
+                        }
+                    }
+                }
+            };
         }
 
         res.setHeader("Content-Type", "text/plain");
