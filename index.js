@@ -79,105 +79,90 @@ let bookedSlots = new Set();
 // ... (Crypto helpers and dynamic generators same rehse)
 
 app.post("/flow", (req, res) => {
-  try {
-    // Health check (no encrypted payload)
-    if (!req.body.encrypted_flow_data) {
-      return res.status(200).send("Active");
-    }
+    try {
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
-    const { data, aesKey, iv } = decryptRequest(req.body);
+        const { data, aesKey, iv } = decryptRequest(req.body);
+        console.log("📥 Action Received:", data.action);
+        console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
 
-    console.log("📥 Action Received:", data.action);
-    console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
-
-    // 1️⃣ Meta Ping (mandatory)
-    if (data.action === "ping") {
-      return res
-        .status(200)
-        .send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-    }
-
-    // Default response
-    let responseBody = {
-      version: "3.0",
-      screen: data.screen || "APPOINTMENT",
-      data: {}
-    };
-
-    // 2️⃣ INIT – Load dates
-    if (data.action === "INIT") {
-      responseBody.data = {
-        date_options: getDynamicDates(),
-        time_options: []
-      };
-    }
-
-    // 3️⃣ Date selected → load times
-    else if (data.action === "date_selected") {
-      const selectedDate = data.date;
-
-      console.log("📅 Selected Date:", selectedDate);
-
-      const availableTimes = getDynamicTimes().filter(
-        (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-      );
-
-      responseBody.screen = "APPOINTMENT";
-      responseBody.data = {
-        date_options: getDynamicDates(),
-        time_options: availableTimes
-      };
-    }
-
-    // 4️⃣ Navigate → SUMMARY (THIS WAS THE MISSING PIECE 🔥)
-    else if (data.action === "navigate") {
-      console.log("➡️ Navigate to SUMMARY with:", data.data);
-
-      responseBody = {
-        version: "3.0",
-        screen: "SUMMARY",
-        data: {
-          name: data.data.name,
-          phone: data.data.phone,
-          date: data.data.date,
-          time: data.data.time
+        // 1. Meta Health Check (Ping) - Aa verified rehva mate jaruri che
+        if (data.action === "ping") {
+            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
-      };
-    }
 
-    // 5️⃣ Final booking confirmation
-    else if (data.action === "complete_booking") {
-      const bookingData = data.data || data;
+        let responseBody = { 
+            version: "3.0", 
+            screen: data.screen || "APPOINTMENT", 
+            data: {} 
+        };
 
-      bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
+        // 2. Initial Data Load
+        if (data.action === "INIT") {
+            responseBody.data = { 
+                date_options: getDynamicDates(), 
+                time_options: [] 
+            };
+        } 
+        
+        // 3. Date Selection Logic - Robust Data Access
+        else if (data.action === "date_selected" || data.action === "data_exchange") {
+            // FIX: Aa line badha data formats handle karse
+            const selectedDate = data.date || (data.data && data.data.date);
+            
+            console.log("📅 Selected Date for filtering:", selectedDate);
 
-      console.log("✅ Booking Confirmed:", bookingData);
-
-      responseBody = {
-        version: "3.0",
-        type: "TERMINATE",
-        screen: "SUMMARY",
-        data: {
-          extension_message_response: {
-            params: {
-              flow_token: data.flow_token,
-              status: "success"
-            }
-          }
+            const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
+            
+            responseBody.screen = "APPOINTMENT"; 
+            responseBody.data = {
+                date_options: getDynamicDates(),
+                time_options: availableTimes
+            };
         }
-      };
-    }
 
-    res.setHeader("Content-Type", "text/plain");
-    return res
-      .status(200)
-      .send(encryptResponse(responseBody, aesKey, iv));
-  } catch (error) {
-    console.error("❌ ERROR:", error);
-    return res.status(421).send("Error");
-  }
+        // 4. Final Booking Logic
+        else if (data.action === "complete_booking") {
+            const bookingData = data.data || data;
+            bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
+            
+            console.log(`✅ Booking Confirmed: ${bookingData.name}`);
+
+            // FIX: Terminal response for success
+            responseBody = {
+                version: "3.0",
+                type: "TERMINATE",
+                screen: "SUMMARY",
+                data: {
+                    extension_message_response: {
+                        params: { flow_token: data.flow_token, status: "success" }
+                    }
+                }
+            };
+        }
+        else if (data.action === "navigate") {
+            console.log("➡️ Navigating to SUMMARY with data:", data.data);
+        
+            responseBody = {
+                version: "3.0",
+                screen: "SUMMARY",
+                data: {
+                    name: data.data.name,
+                    phone: data.data.phone,
+                    date: data.data.date,
+                    time: data.data.time
+                }
+            };
+        }
+
+
+        res.setHeader("Content-Type", "text/plain");
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+
+    } catch (error) {
+        console.error("❌ ERROR:", error.message);
+        return res.status(421).send("Error");
+    }
 });
-
-
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
