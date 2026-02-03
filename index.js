@@ -76,64 +76,47 @@ function getDynamicTimes() {
 let bookedSlots = new Set();
 
 // --- MAIN ENDPOINT ---
+// ... (Crypto helpers and dynamic generators same rehse)
+
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action:", data.action);
+        
+        console.log("📥 Received Data:", JSON.stringify(data, null, 2));
 
-        // 1. HEALTH CHECK (PING)
-        if (data.action === "ping") {
-            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-        }
+        let responseBody = { version: "3.0", screen: data.screen, data: {} };
 
-        // 2. INITIALIZE RESPONSE STRUCTURE
-        // Document mujab 'screen' property compulsory che top level par
-        let responseBody = { 
-            version: "3.0", 
-            screen: "APPOINTMENT", // Default screen name
-            data: {} 
-        };
-
-        // 3. LOGIC BASED ON ACTION
         if (data.action === "INIT") {
-            responseBody.data = { 
-                date_options: getDynamicDates(), 
-                time_options: [] 
-            };
+            responseBody.screen = "APPOINTMENT";
+            responseBody.data = { date_options: getDynamicDates(), time_options: [] };
         } 
-        else if (data.action === "date_selected" || data.action === "data_exchange") {
-            // Dropdown select thay tyare screen name hamesha APPOINTMENT rehse
-            const selectedDate = data.data.date;
+        else if (data.action === "date_selected") {
+            // FIX: data.data.date jo nested hoy to, nahitar direct data.date
+            const selectedDate = data.date || (data.data && data.data.date);
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
             
-            responseBody.screen = "APPOINTMENT"; 
+            responseBody.screen = "APPOINTMENT";
             responseBody.data = { 
                 date_options: getDynamicDates(), 
                 time_options: availableTimes 
             };
         }
         else if (data.action === "complete_booking") {
-            // FLOW COMPLETION logic as per document
-            const { date, time } = data.data;
-            bookedSlots.add(`${date}_${time}`);
+            // FIX: Data access for final booking
+            const bookingInfo = data.data || data;
+            bookedSlots.add(`${bookingInfo.date}_${bookingInfo.time}`);
 
-            responseBody.screen = "SUCCESS"; // Mandatory final screen name
+            // IMPORTANT: Screen name match thavo joie JSON sathe
+            responseBody.screen = "SUMMARY"; 
             responseBody.data = { 
                 extension_message_response: { 
-                    params: { 
-                        flow_token: data.flow_token, 
-                        status: "success" 
-                    } 
+                    params: { flow_token: data.flow_token, status: "success" } 
                 } 
             };
         }
 
-        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
-        res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptedRes);
-
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     } catch (error) {
         console.error("❌ ERROR:", error.message);
         return res.status(421).send("Error");
