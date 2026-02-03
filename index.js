@@ -110,21 +110,35 @@ app.post("/flow", (req, res) => {
     }
 
     // 3️⃣ Date selected - Load times
-    else if (data.action === "date_selected" || data.action === "data_exchange") {
+    // 3️⃣ Date/Time BOTH selected - Navigate to DETAILS (🚨 MAIN FIX)
+    else if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
       const selectedDate = data.date || (data.data && data.data.date);
+      const selectedTime = data.time || (data.data && data.data.time);
+      
       console.log("📅 Selected Date:", selectedDate);
-
-      const availableTimes = getDynamicTimes().filter(
-        (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-      );
-
-      responseBody.screen = "APPOINTMENT";
-      responseBody.data = {
-        date_options: getDynamicDates(),
-        time_options: availableTimes
-      };
-    }
-
+      console.log("🕒 Selected Time:", selectedTime);
+    
+      // Date + Time both selected = Go to DETAILS
+      if (selectedDate && selectedTime) {
+        bookedSlots.add(`${selectedDate}_${selectedTime}`);
+        responseBody.screen = "DETAILS";
+        responseBody.data = {
+          date: selectedDate,
+          time: selectedTime
+        };
+      } 
+  // Only date = Load times (existing logic)
+  else if (selectedDate) {
+    const availableTimes = getDynamicTimes().filter(
+      (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
+    );
+    responseBody.screen = "APPOINTMENT";
+    responseBody.data = {
+      date_options: getDynamicDates(),
+      time_options: availableTimes
+    };
+  }
+}
     // 4️⃣ DETAILS → SUMMARY navigation (🚨 MAIN FIX)
     else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
       const detailsData = data.payload || {};  // ✅ FIXED: Declare first
