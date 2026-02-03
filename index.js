@@ -91,7 +91,13 @@ app.post("/flow", (req, res) => {
         else if (data.action === "date_selected") {
             const selectedDate = data.data.date;
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
-            responseBody.data = { date_options: getDynamicDates(), time_options: availableTimes };
+            
+            // Aa response hamesha APPOINTMENT screen par j rehse
+            responseBody.screen = "APPOINTMENT"; 
+            responseBody.data = { 
+                date_options: getDynamicDates(), // Pehla dropdown retain karva mate
+                time_options: availableTimes      // Have time dropdown bharase
+            };
         }
         else if (data.action === "complete_booking" || data.action === "data_exchange") {
             // Check karo ke kayi screen mathi request avi che
