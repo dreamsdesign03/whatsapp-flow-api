@@ -6,10 +6,8 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// Render variable mathi key lese
 const rawKey = process.env.PRIVATE_KEY || "";
 
-// PEM format converter
 const formatPrivateKey = (key) => {
     if (!key) return "";
     if (key.includes('BEGIN PRIVATE KEY')) return key;
@@ -19,7 +17,6 @@ const formatPrivateKey = (key) => {
 
 const PRIVATE_KEY = formatPrivateKey(rawKey);
 
-// --- CRYPTO HELPERS ---
 function decryptRequest(body) {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
     const aesKey = crypto.privateDecrypt(
@@ -45,7 +42,6 @@ function encryptResponse(data, aesKey, iv) {
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// --- DYNAMIC DATA GENERATORS ---
 function getDynamicDates() {
     const options = [];
     let d = new Date();
@@ -75,68 +71,49 @@ function getDynamicTimes() {
 
 let bookedSlots = new Set();
 
-// --- MAIN ENDPOINT ---
 app.post("/flow", (req, res) => {
     try {
         if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
         const { data, aesKey, iv } = decryptRequest(req.body);
-        console.log("📥 Action:", data.action);
+        console.log("📥 Received Action:", data.action);
 
-        // 1. HEALTH CHECK (PING)
         if (data.action === "ping") {
             return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
 
-        // 2. INITIALIZE RESPONSE STRUCTURE
-        // Document mujab 'screen' property compulsory che top level par
-        let responseBody = { 
-            version: "3.0", 
-            screen: "APPOINTMENT", // Default screen name
-            data: {} 
-        };
+        let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-        // 3. LOGIC BASED ON ACTION
         if (data.action === "INIT") {
-            responseBody.data = { 
-                date_options: getDynamicDates(), 
-                time_options: [] 
-            };
+            responseBody.data = { date_options: getDynamicDates(), time_options: [] };
         } 
-        else if (data.action === "date_selected" || data.action === "data_exchange") {
-            // Dropdown select thay tyare screen name hamesha APPOINTMENT rehse
+        else if (data.action === "date_selected") {
             const selectedDate = data.data.date;
             const availableTimes = getDynamicTimes().filter(s => !bookedSlots.has(`${selectedDate}_${s.id}`));
-            
-            responseBody.screen = "APPOINTMENT"; 
-            responseBody.data = { 
-                date_options: getDynamicDates(), 
-                time_options: availableTimes 
-            };
+            responseBody.data = { date_options: getDynamicDates(), time_options: availableTimes };
         }
         else if (data.action === "complete_booking") {
-            // FLOW COMPLETION logic as per document
-            const { date, time } = data.data;
+            const { date, time, name, phone } = data.data;
             bookedSlots.add(`${date}_${time}`);
+            
+            // 🚀 Ahiya tame booking details print kari shako cho
+            console.log(`✅ BOOKING CONFIRMED: ${name} (${phone}) for ${date} at ${time}`);
 
-            responseBody.screen = "SUCCESS"; // Mandatory final screen name
+            responseBody.screen = "SUCCESS";
             responseBody.data = { 
                 extension_message_response: { 
-                    params: { 
-                        flow_token: data.flow_token, 
-                        status: "success" 
-                    } 
+                    params: { flow_token: data.flow_token, status: "success", booked_name: name } 
                 } 
             };
         }
 
-        const encryptedRes = encryptResponse(responseBody, aesKey, iv);
         res.setHeader("Content-Type", "text/plain");
-        return res.status(200).send(encryptedRes);
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
     } catch (error) {
         console.error("❌ ERROR:", error.message);
         return res.status(421).send("Error");
     }
 });
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+app.listen(PORT, () => console.log(`🚀 Flow Server Live on Port ${PORT}`));
