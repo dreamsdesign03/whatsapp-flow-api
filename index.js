@@ -92,9 +92,7 @@ app.post("/flow", (req, res) => {
 
     // 1️⃣ Ping
     if (data.action === "ping") {
-      return res
-        .status(200)
-        .send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
+      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
     let responseBody = {
@@ -103,7 +101,7 @@ app.post("/flow", (req, res) => {
       data: {}
     };
 
-    // 2️⃣ INIT
+    // 2️⃣ INIT - First screen load
     if (data.action === "INIT") {
       responseBody.data = {
         date_options: getDynamicDates(),
@@ -111,11 +109,9 @@ app.post("/flow", (req, res) => {
       };
     }
 
-
-    // 4️⃣ Date selected / data exchange (time loading)
+    // 3️⃣ Date selected - Load times
     else if (data.action === "date_selected" || data.action === "data_exchange") {
       const selectedDate = data.date || (data.data && data.data.date);
-
       console.log("📅 Selected Date:", selectedDate);
 
       const availableTimes = getDynamicTimes().filter(
@@ -129,10 +125,11 @@ app.post("/flow", (req, res) => {
       };
     }
 
+    // 4️⃣ DETAILS → SUMMARY navigation (🚨 MAIN FIX)
     else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
-      console.log("Booking Confirmed:", detailsData);
-      const detailsData = data.payload || {};
-        console.log("✅ Booking Confirmed:", detailsData);
+      const detailsData = data.payload || {};  // ✅ FIXED: Declare first
+      console.log("✅ DETAILS Form Data:", detailsData);
+      
       responseBody.screen = "SUMMARY";
       responseBody.data = {
         name: detailsData.name || "",
@@ -142,12 +139,11 @@ app.post("/flow", (req, res) => {
       };
     }
 
-    // 5️⃣ Final booking
+    // 5️⃣ Final booking confirmation
     else if (data.action === "complete_booking") {
       const bookingData = data.data || data;
-
       bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
-      console.log("✅ Booking Confirmed:", bookingData);
+      console.log("✅ FINAL Booking Confirmed:", bookingData);
 
       responseBody = {
         version: "3.0",
@@ -165,9 +161,7 @@ app.post("/flow", (req, res) => {
     }
 
     res.setHeader("Content-Type", "text/plain");
-    return res
-      .status(200)
-      .send(encryptResponse(responseBody, aesKey, iv));
+    return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
   } catch (error) {
     console.error("❌ ERROR:", error);
