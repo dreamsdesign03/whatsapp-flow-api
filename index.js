@@ -207,29 +207,57 @@ app.post("/flow", (req, res) => {
         }
 
         // SUMMARY
+        // #4 SUMMARY SCREEN - FULL DEBUG VERSION
         if (data.screen === "SUMMARY") {
+            console.log("\n📋 === SUMMARY DEBUG ===");
+            console.log("🔍 COMPLETE DATA:", JSON.stringify(data, null, 2));
+            
+            // Try EVERY possible data location
+            const getValue = (field) => {
+                return data.data?.[field] || 
+                       data.payload?.[field] || 
+                       data.data?.payload?.[field] ||
+                       data.payload?.data?.[field] ||
+                       data.data?.form?.[field] ||
+                       "";
+            };
+            
             const bookingData = {
-                department: data.payload?.department || data.data?.department,
-                location: data.payload?.location || data.data?.location,
-                date: data.payload?.date || data.data?.date,
-                time: data.payload?.time || data.data?.time,
-                name: data.payload?.name || data.data?.name,
-                phone: data.payload?.phone || data.data?.phone,
-                email: data.payload?.email || data.data?.email
+                department: getValue('department'),
+                location: getValue('location'),
+                date: getValue('date'),
+                time: getValue('time'),
+                name: getValue('name'),
+                phone: getValue('phone'),
+                email: getValue('email')
             };
-
+            
+            console.log("📦 EXTRACTED:", bookingData);
+            
+            const appointmentText = bookingData.department && bookingData.location 
+                ? `${DEPT_NAMES[bookingData.department] || bookingData.department} at ${LOC_NAMES[bookingData.location] || bookingData.location}`
+                : "No appointment selected";
+                
+            const detailsText = bookingData.name 
+                ? `${bookingData.name}\n${bookingData.phone}\n${bookingData.email || 'No email'}`
+                : "Please enter your details";
+            
+            console.log("📝 APPOINTMENT:", appointmentText);
+            console.log("📝 DETAILS:", detailsText);
+        
             responseBody.data = {
-                department: bookingData.department,
-                location: bookingData.location,
-                date: bookingData.date,
-                time: bookingData.time,
-                name: bookingData.name,
-                phone: bookingData.phone,
-                email: bookingData.email,
-                appointment: `${DEPT_NAMES[bookingData.department] || bookingData.department} at ${LOC_NAMES[bookingData.location] || bookingData.location}`,
-                details: `${bookingData.name}\n${bookingData.phone}\n${bookingData.email}`
+                department: bookingData.department || "",
+                location: bookingData.location || "",
+                date: bookingData.date || "",
+                time: bookingData.time || "",
+                name: bookingData.name || "",
+                phone: bookingData.phone || "",
+                email: bookingData.email || "",
+                appointment: appointmentText,
+                details: detailsText
             };
-            console.log("✅ SUMMARY formatted");
+            
+            console.log("✅ SUMMARY SENT:", responseBody.data.appointment);
             return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
         }
 
