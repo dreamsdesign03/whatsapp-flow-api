@@ -1,4 +1,3 @@
-
 import express from "express";
 import crypto from "crypto";
 
@@ -9,32 +8,39 @@ const PORT = process.env.PORT || 10000;
 
 // Render variable mathi key lese
 const rawKey = process.env.PRIVATE_KEY || "";
-
-// PEM format converter
-const formatPrivateKey = (key) => {
-    if (!key) return "";
-    if (key.includes('BEGIN PRIVATE KEY')) return key;
-    const wrappedKey = key.replace(/\s/g, '').replace(/(.{64})/g, "$1\n");
-    return `-----BEGIN PRIVATE KEY-----\n${wrappedKey}\n-----END PRIVATE KEY-----`;
-};
-
 const PRIVATE_KEY = formatPrivateKey(rawKey);
 
-// --- CRYPTO HELPERS ---
+// PEM format converter
+function formatPrivateKey(key) {
+    if (!key) return "";
+    if (key.includes('BEGIN PRIVATE KEY')) return key;
+    const wrappedKey = key.replace(/\\s/g, '').replace(/(.{64})/g, "$1\\n");
+    return `-----BEGIN PRIVATE KEY-----\\n${wrappedKey}\\n-----END PRIVATE KEY-----`;
+}
+
+// 🔐 Crypto helpers
 function decryptRequest(body) {
+    console.log("🔓 Decrypting request...");
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+    
     const aesKey = crypto.privateDecrypt(
         { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
         Buffer.from(encrypted_aes_key, "base64")
     );
+    
     const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
     const ivBuffer = Buffer.from(initial_vector, "base64");
     const tag = flowDataBuffer.slice(-16);
     const encryptedData = flowDataBuffer.slice(0, -16);
+    
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
     decipher.setAuthTag(tag);
+    
+    const decryptedData = JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8"));
+    console.log("✅ Decryption successful. Data keys:", Object.keys(decryptedData));
+    
     return { 
-        data: JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8")), 
+        data: decryptedData, 
         aesKey, 
         iv: ivBuffer 
     };
@@ -46,162 +52,232 @@ function encryptResponse(data, aesKey, iv) {
     return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// --- DYNAMIC DATA GENERATORS ---
+// 📅 Dynamic Data Generators
 function getDynamicDates() {
+    console.log("📅 Generating dynamic dates...");
     const options = [];
     let d = new Date();
-    while (options.length < 7) {
+    
+    // Skip weekends, get next 7 working days
+    for (let i = 0; i < 14 && options.length < 7; i++) {
         if (d.getDay() !== 0 && d.getDay() !== 6) {
+            const dateStr = d.toISOString().split('T')[0];
             options.push({ 
-                id: d.toISOString().split('T')[0], 
-                title: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) 
+                id: dateStr,
+                title: d.toLocaleDateString('en-IN', { 
+                    weekday: 'short', 
+                    day: 'numeric', 
+                    month: 'short' 
+                })
             });
+            console.log(`   Added: ${options[options.length-1].title}`);
         }
         d.setDate(d.getDate() + 1);
     }
+    console.log(`✅ Generated ${options.length} date options`);
     return options;
 }
 
 function getDynamicTimes() {
+    console.log("🕒 Generating dynamic times...");
     const slots = [];
-    for (let h = 11; h < 18; h++) {
+    for (let h = 10; h <= 20; h++) {
         ["00", "30"].forEach(m => {
-            const displayH = h > 12 ? h - 12 : h;
+            const hour12 = h % 12 || 12;
             const ampm = h >= 12 ? "PM" : "AM";
-            slots.push({ id: `${displayH}:${m} ${ampm}`, title: `${displayH}:${m} ${ampm}` });
+            if (slots.length < 12) { // Limit to 12 slots
+                slots.push({ 
+                    id: `${h}:${m}`, 
+                    title: `${hour12}:${m} ${ampm}` 
+                });
+            }
         });
     }
+    console.log(`✅ Generated ${slots.length} time slots`);
     return slots;
 }
 
-let bookedSlots = new Set();
+// Static data
+const DEPARTMENTS = [
+    { id: "haircut", title: "Haircut & Styling" },
+    { id: "beauty", title: "Beauty & Makeup" },
+    { id: "spa", title: "Spa & Massage" },
+    { id: "manicure", title: "Manicure & Pedicure" }
+];
 
-// --- MAIN ENDPOINT ---
-// ... (Crypto helpers and dynamic generators same rehse)
+const LOCATIONS = [
+    { id: "1", title: "Vadodara - Alkapuri" },
+    { id: "2", title: "Vadodara - Fatehgunj" },
+    { id: "3", title: "Vadodara - Gotri" }
+];
 
+// Data mapping for display
+const DEPT_NAMES = {
+    haircut: "Haircut & Styling",
+    beauty: "Beauty & Makeup", 
+    spa: "Spa & Massage",
+    manicure: "Manicure & Pedicure"
+};
+
+const LOC_NAMES = {
+    "1": "Vadodara - Alkapuri",
+    "2": "Vadodara - Fatehgunj", 
+    "3": "Vadodara - Gotri"
+};
+
+// 🌐 Main Flow Endpoint
 app.post("/flow", (req, res) => {
-  try {
-    if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
-
-    const { data, aesKey, iv } = decryptRequest(req.body);
-    console.log("📱 Screen:", data.screen || "NONE");
-    console.log("⚡ Action:", data.action);
-
-    let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
-
-    // #1 PING
-    if (data.action === "ping") {
-      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-    }
-
-    // #2 INIT & APPOINTMENT - ALWAYS SEND FULL DATA
-    if (data.action === "INIT" || (data.action === "data_exchange" && data.screen === "APPOINTMENT")) {
-      console.log("🚀 LOADING APPOINTMENT DATA");
-      
-      responseBody.data = {
-        // ✅ Department dropdown data
-        department: [
-          { id: "beauty", title: "Beauty & Personal Care" },
-          { id: "shopping", title: "Shopping & Groceries" },
-          { id: "clothing", title: "Clothing & Apparel" },
-          { id: "electronics", title: "Electronics" },
-          { id: "home", title: "Home Goods & Decor" }
-        ],
-        // ✅ Location dropdown data  
-        location: [
-          { id: "1", title: "Vadodara Branch 1" },
-          { id: "2", title: "Vadodara Branch 2" },
-          { id: "3", title: "Alkapuri Store" },
-          { id: "4", title: "Fatehgunj Outlet" }
-        ],
-        is_location_enabled: true,
-        // ✅ Date dropdown data (your dynamic function)
-        date: getDynamicDates(),
-        is_date_enabled: true,
-        // ✅ Time dropdown data (your dynamic function)
-        time: getDynamicTimes(),
-        is_time_enabled: true
-      };
-      
-      console.log("✅ DROPDOWN DATA SENT:", Object.keys(responseBody.data));
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
-    // #3 DETAILS → SUMMARY (data_exchange from DETAILS Continue button)
-    if (data.action === "data_exchange" && data.screen === "DETAILS") {
-      console.log("🎉 DETAILS SUBMITTED:", data);
-      
-      const bookingData = {
-        department: data.department || data.payload?.department,
-        location: data.location || data.payload?.location,
-        date: data.date || data.payload?.date,
-        time: data.time || data.payload?.time,
-        name: data.name || data.payload?.name,
-        email: data.email || data.payload?.email,
-        phone: data.phone || data.payload?.phone,
-        more_details: data.more_details || data.payload?.more_details
-      };
-
-      // Location/department names for display
-      const deptNames = {
-        beauty: "Beauty & Personal Care", shopping: "Shopping & Groceries",
-        clothing: "Clothing & Apparel", electronics: "Electronics", home: "Home Goods"
-      };
-      const locNames = { "1": "Vadodara Branch 1", "2": "Vadodara Branch 2", 
-                       "3": "Alkapuri Store", "4": "Fatehgunj Outlet" };
-
-      responseBody = {
-        version: "3.0",
-        screen: "SUMMARY",
-        data: {
-          appointment: `${deptNames[bookingData.department] || bookingData.department} Department\n${locNames[bookingData.location] || bookingData.location}\n${bookingData.date} at ${bookingData.time}`,
-          details: `Name: ${bookingData.name}\nEmail: ${bookingData.email}\nPhone: ${bookingData.phone}${bookingData.more_details ? `\n\n${bookingData.more_details}` : ""}`,
-          department: bookingData.department,
-          location: bookingData.location,
-          date: bookingData.date,
-          time: bookingData.time,
-          name: bookingData.name,
-          email: bookingData.email,
-          phone: bookingData.phone,
-          more_details: bookingData.more_details
+    try {
+        console.log("\n🚀 === NEW REQUEST ===");
+        console.log("📡 Request body keys:", Object.keys(req.body));
+        
+        if (!req.body.encrypted_flow_data) {
+            console.log("🏓 PING response");
+            return res.status(200).send("Active");
         }
-      };
-      
-      console.log("✅ SUMMARY PREPARED:", responseBody.data.appointment);
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
 
-    // #4 SUMMARY Confirm → TERMINATE
-    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ BOOKING CONFIRMED!");
-      responseBody = {
-        version: "3.0",
-        type: "TERMINATE",
-        screen: "SUMMARY",
-        data: {
-          extension_message_response: {
-            params: {
-              flow_token: data.flow_token,
-              status: "success",
-              message: `🎉 Appointment confirmed!\n\n${data.name || "Customer"} - ${data.date} ${data.time}`
-            }
-          }
+        const { data, aesKey, iv } = decryptRequest(req.body);
+        
+        console.log("\n📱 SCREEN:", data.screen || "UNKNOWN");
+        console.log("⚡ ACTION:", data.action || "NONE");
+        console.log("🔍 FULL DATA:", JSON.stringify(data, null, 2));
+        console.log("📦 PAYLOAD:", JSON.stringify(data.payload || {}, null, 2));
+        console.log("📋 FORM DATA:", JSON.stringify(data.data || {}, null, 2));
+
+        let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
+
+        // #1 PING
+        if (data.action === "ping") {
+            console.log("🏓 PING - Sending active status");
+            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
         }
-      };
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+
+        // #2 APPOINTMENT SCREEN - Load Dynamic Data
+        if (data.screen === "APPOINTMENT" || data.action === "INIT") {
+            console.log("\n🎯 LOADING APPOINTMENT SCREEN - SENDING DYNAMIC DATA");
+            
+            responseBody.data = {
+                department: DEPARTMENTS,
+                location: LOCATIONS,
+                date: getDynamicDates(),
+                time: getDynamicTimes()
+            };
+            
+            console.log("✅ DROPDOWN DATA SENT:");
+            console.log("   Departments:", responseBody.data.department.map(d => d.title));
+            console.log("   Locations:", responseBody.data.location.map(l => l.title));
+            console.log("   Dates:", responseBody.data.date.map(d => d.title));
+            console.log("   Times:", responseBody.data.time.map(t => t.title));
+            
+            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        }
+
+        // #3 DETAILS SCREEN - Pass through appointment data + empty personal fields
+        if (data.screen === "DETAILS") {
+            console.log("\n👤 DETAILS SCREEN - Extracting appointment data");
+            
+            const appointmentData = {
+                department: data.payload?.department || data.data?.department || "",
+                location: data.payload?.location || data.data?.location || "",
+                date: data.payload?.date || data.data?.date || "",
+                time: data.payload?.time || data.data?.time || "",
+                name: data.payload?.name || "",
+                phone: data.payload?.phone || "",
+                email: data.payload?.email || ""
+            };
+            
+            responseBody.data = appointmentData;
+            
+            console.log("✅ DETAILS DATA PREPARED:");
+            console.log("   Service:", appointmentData.department);
+            console.log("   Location:", appointmentData.location);
+            console.log("   Date:", appointmentData.date);
+            console.log("   Time:", appointmentData.time);
+            
+            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        }
+
+        // #4 SUMMARY SCREEN - Format display data
+        if (data.screen === "SUMMARY") {
+            console.log("\n📋 SUMMARY SCREEN - Formatting final display");
+            
+            const bookingData = {
+                department: data.payload?.department || data.data?.department,
+                location: data.payload?.location || data.data?.location,
+                date: data.payload?.date || data.data?.date,
+                time: data.payload?.time || data.data?.time,
+                name: data.payload?.name || data.data?.name,
+                phone: data.payload?.name || data.data?.phone,
+                email: data.payload?.email || data.data?.email
+            };
+            
+            console.log("📦 RAW BOOKING DATA:", bookingData);
+
+            // Format display strings
+            const appointmentText = `${DEPT_NAMES[bookingData.department] || bookingData.department} at ${LOC_NAMES[bookingData.location] || bookingData.location}`;
+            const detailsText = `${bookingData.name}\n${bookingData.phone}\n${bookingData.email}`;
+
+            responseBody.data = {
+                department: bookingData.department,
+                location: bookingData.location,
+                date: bookingData.date,
+                time: bookingData.time,
+                name: bookingData.name,
+                phone: bookingData.phone,
+                email: bookingData.email,
+                appointment: appointmentText,
+                details: detailsText
+            };
+            
+            console.log("✅ SUMMARY DISPLAY TEXT:");
+            console.log("   Appointment:", appointmentText);
+            console.log("   Details:\n" + detailsText);
+            
+            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        }
+
+        // #5 CONFIRM BOOKING - Final submission
+        if (data.action === "data_exchange" && data.payload?.action === "confirm_booking") {
+            console.log("\n🎉 BOOKING CONFIRMED! SAVING DATA:");
+            console.log("👤 Customer:", data.data?.name || "Unknown");
+            console.log("📅 Appointment:", `${data.data?.date} ${data.data?.time}`);
+            console.log("📍 Location:", LOC_NAMES[data.data?.location]);
+            console.log("✂️ Service:", DEPT_NAMES[data.data?.department]);
+            
+            // TODO: Save to database here
+            
+            responseBody = {
+                version: "3.0",
+                type: "TERMINATE",
+                screen: "SUMMARY",
+                data: {
+                    extension_message_response: {
+                        params: {
+                            flow_token: data.flow_token,
+                            status: "success",
+                            message: `✅ *Appointment Confirmed!*\n\n👤 ${data.data?.name || "Customer"}\n📅 ${data.data?.date} at ${data.data?.time}\n📍 ${LOC_NAMES[data.data?.location] || data.data?.location}\n✂️ ${DEPT_NAMES[data.data?.department] || data.data?.department}`
+                        }
+                    }
+                }
+            };
+            
+            console.log("🏁 Flow terminated successfully");
+            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        }
+
+        // Fallback
+        console.log("⚠️ Unknown screen/action - sending empty response");
+        res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+
+    } catch (error) {
+        console.error("💥 ERROR:", error);
+        res.status(421).send("Error");
     }
-
-    console.log("⚠️ FALLBACK");
-    res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-
-  } catch (error) {
-    console.error("💥 ERROR:", error);
-    res.status(421).send("Error");
-  }
 });
 
-
-
-
-
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`\n🚀 WhatsApp Flow Server running on port ${PORT}`);
+    console.log("✅ Dynamic dates/times enabled");
+    console.log("✅ Detailed logging enabled");
+    console.log("✅ Ready for frontend flow!\n");
+});
