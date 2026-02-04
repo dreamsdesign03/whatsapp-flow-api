@@ -95,9 +95,15 @@ app.post("/flow", (req, res) => {
         }
 
         // 2. APPOINTMENT SCREEN - Dynamic Data Fill
-        if (action === "INIT" || screen === "APPOINTMENT") {
-            responseBody.screen = "APPOINTMENT";
+        if (action === "ping" || action === "INIT" || !screen) {
+            console.log("🏓 Handling Health Check / Flow Start");
+            
+            responseBody.screen = "APPOINTMENT"; // Aa property required che
             responseBody.data = {
+                // Ping mate status
+                status: "active",
+                
+                // APPOINTMENT screen na dynamic data
                 department: Object.keys(DEPT_NAMES).map(id => ({ id, title: DEPT_NAMES[id] })),
                 location: Object.keys(LOC_NAMES).map(id => ({ id, title: LOC_NAMES[id] })),
                 date: getDynamicDates(),
@@ -106,29 +112,38 @@ app.post("/flow", (req, res) => {
                 is_date_enabled: true,
                 is_time_enabled: true
             };
-            console.log("✅ APPOINTMENT Data Loaded");
+            
+            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
         }
-
         // 3. SUMMARY SCREEN - Accurate Review Data
         else if (screen === "DETAILS" && action === "data_exchange") {
-            const deptTitle = DEPT_NAMES[payload.department] || payload.department;
-            const locTitle = LOC_NAMES[payload.location] || payload.location;
+        // Payload mathi data fetch karva
+        const payload = data.data || data.payload || {};
+        
+        const deptTitle = DEPT_NAMES[payload.department] || payload.department;
+        const locTitle = LOC_NAMES[payload.location] || payload.location;
+        
+        responseBody.screen = "SUMMARY"; // Required field
+        responseBody.data = {
+            // JSON ma ${data.appointment} ma aa dekhase
+            appointment: `🏢 ${deptTitle}\n📍 ${locTitle}\n📅 ${payload.date} at ${payload.time}`,
             
-            responseBody.screen = "SUMMARY";
-            responseBody.data = {
-                appointment: `${deptTitle} at ${locTitle}\n${payload.date} at ${payload.time}.`,
-                details: `Name: ${payload.name}\nEmail: ${payload.email}\nPhone: ${payload.phone}`,
-                // Passing IDs back for the final submission
-                department: payload.department,
-                location: payload.location,
-                date: payload.date,
-                time: payload.time,
-                name: payload.name,
-                email: payload.email,
-                phone: payload.phone
-            };
-            console.log("✅ SUMMARY Data Prepared");
-        }
+            // JSON ma ${data.details} ma aa dekhase
+            details: `👤 Name: ${payload.name}\n📧 Email: ${payload.email}\n📞 Phone: ${payload.phone}`,
+            
+            // IDs forward karo jethi final CONFIRM ma use thai shake
+            department: payload.department,
+            location: payload.location,
+            date: payload.date,
+            time: payload.time,
+            name: payload.name,
+            email: payload.email,
+            phone: payload.phone
+        };
+    
+    console.log("✅ SUMMARY screen prepared with accurate data");
+    return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+}
 
         // 4. FINAL SUBMIT
         else if (screen === "SUMMARY" && action === "data_exchange") {
