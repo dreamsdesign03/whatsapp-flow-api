@@ -85,76 +85,44 @@ app.post("/flow", (req, res) => {
 
     const { data, aesKey, iv } = decryptRequest(req.body);
     console.log("🔍 RAW DATA:", JSON.stringify(data, null, 2));
-
-    // 🚨 ALWAYS LOG THESE FIRST
     console.log("📱 Screen:", data.screen || "NONE");
     console.log("⚡ Action:", data.action);
     console.log("📦 Payload:", data.payload || "EMPTY");
-    console.log("📋 Data:", data.data || "EMPTY");
 
     let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
 
-    // #1 NAVIGATE HANDLER - TOP PRIORITY!
-    if (data.action === "navigate") {
-      console.log("🚀 NAVIGATE DETECTED! Next:", data.next?.name);
-      
-      if (data.next?.name === "SUMMARY") {
-        console.log("🎉 DETAILS → SUMMARY!");
-        
-        // TRY ALL POSSIBLE DATA SOURCES
-        const summaryData = {
-          name: data.payload?.name || 
-                data.data?.name || 
-                data.form?.name || 
-                data.details_form?.name || 
-                "Not provided",
-          phone: data.payload?.phone || 
-                 data.data?.phone || 
-                 data.form?.phone || 
-                 data.details_form?.phone || 
-                 "Not provided",
-          date: data.payload?.date || 
-                data.data?.date || 
-                data.date || 
-                "Not selected",
-          time: data.payload?.time || 
-               data.data?.time || 
-               data.time || 
-               "Not selected"
-        };
-        
-        console.log("✅ SUMMARY DATA PREPARED:", summaryData);
-        
-        responseBody = {
-          version: "3.0",
-          screen: "SUMMARY",
-          data: summaryData
-        };
-        
-        console.log("📤 SENDING SUMMARY:", responseBody);
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-      }
-
-      if (data.next?.name === "DETAILS") {
-        console.log("✅ APPOINTMENT → DETAILS");
-        responseBody.screen = "DETAILS";
-        responseBody.data = {
-          date: data.payload?.date || data.date,
-          time: data.payload?.time || data.time
-        };
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-      }
+    // 🚀 NEW: Handle custom navigation actions
+    if (data.action === "go_to_summary") {
+      console.log("🎉 GO TO SUMMARY!");
+      responseBody.screen = "SUMMARY";
+      responseBody.data = {
+        name: data.payload?.name || data.name || "Not provided",
+        phone: data.payload?.phone || data.phone || "Not provided",
+        date: data.payload?.date || data.date || "Not selected", 
+        time: data.payload?.time || data.time || "Not selected"
+      };
+      console.log("✅ SUMMARY DATA:", responseBody.data);
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #2 PING
+    if (data.action === "go_to_details") {
+      console.log("✅ GO TO DETAILS!");
+      bookedSlots.add(`${data.payload.date}_${data.payload.time}`);
+      responseBody.screen = "DETAILS";
+      responseBody.data = {
+        date: data.payload.date,
+        time: data.payload.time
+      };
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // PING
     if (data.action === "ping") {
-      console.log("🏓 PING");
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    // #3 INIT
+    // INIT
     if (data.action === "INIT") {
-      console.log("🚀 INIT - Loading dates/times");
       responseBody.data = { 
         date_options: getDynamicDates(), 
         time_options: getDynamicTimes()
@@ -162,47 +130,33 @@ app.post("/flow", (req, res) => {
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #4 SUMMARY data_exchange (Confirm button)
+    // SUMMARY Confirm
     if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ CONFIRM BUTTON - TERMINATING!");
-      console.log("📋 SUMMARY DATA:", data.data);
-      
+      console.log("✅ BOOKING CONFIRMED!");
       responseBody = { 
         version: "3.0", 
         type: "TERMINATE",
         screen: "SUMMARY",
         data: {
-          name: data.data?.name || data.name || "Not provided",
-          phone: data.data?.phone || data.phone || "Not provided", 
-          date: data.data?.date || data.date || "Not selected",
-          time: data.data?.time || data.time || "Not selected",
+          ...data.data,
           extension_message_response: {
             params: {
               flow_token: data.flow_token,
               status: "success",
-              message: "Appointment confirmed! We'll see you soon."
+              message: "Appointment booked successfully! 🎉"
             }
           }
         }
       };
-      console.log("🛑 TERMINATE SENT");
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #5 APPOINTMENT data_exchange
+    // APPOINTMENT date/time selection
     if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
       const date = data.date || data.data?.date;
       const time = data.time || data.data?.time;
       
-      console.log("📅 APPOINTMENT:", { date, time });
-      
-      if (date && time) {
-        console.log("✅ FULL SELECTION → DETAILS");
-        bookedSlots.add(`${date}_${time}`);
-        responseBody.screen = "DETAILS";
-        responseBody.data = { date, time };
-      } else if (date) {
-        console.log("⏳ DATE ONLY → Loading times");
+      if (date && !time) {
         responseBody.data = {
           date_options: getDynamicDates(),
           time_options: getDynamicTimes()
@@ -211,14 +165,13 @@ app.post("/flow", (req, res) => {
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    console.log("⚠️ FALLBACK RESPONSE");
     res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-
   } catch (error) {
     console.error("💥 ERROR:", error);
     res.status(421).send("Error");
   }
 });
+
 
 
 
