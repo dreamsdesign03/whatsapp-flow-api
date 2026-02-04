@@ -87,47 +87,83 @@ app.post("/flow", (req, res) => {
     console.log("📥 Action:", data.action, "Screen:", data.screen);
     console.log("📥 Full Data:", JSON.stringify(data, null, 2));
 
-    let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
-
-    // 🚨 #1 NAVIGATE - DETAILS → SUMMARY
+    // 🚨 #1 NAVIGATE - ALWAYS RETURN RESPONSE!
     if (data.action === "navigate") {
-      console.log("🔄 NAVIGATE:", JSON.stringify(data.next));
+      console.log("🔄 NAVIGATE:", data.next?.name);
       
       if (data.next?.name === "SUMMARY") {
-        const payload = data.payload || {};
+        const payload = data.payload || data.data || {};
         console.log("✅ SUMMARY PAYLOAD:", payload);
         
-        responseBody.screen = "SUMMARY";
-        responseBody.data = {
+        const summaryData = {
           name: payload.name || payload.details_form?.name || "Not provided",
           phone: payload.phone || payload.details_form?.phone || "Not provided",
-          date: payload.date || data.data?.date || "Not selected",
-          time: payload.time || data.data?.time || "Not selected"
+          date: payload.date || payload.data?.date || "Not selected",
+          time: payload.time || payload.data?.time || "Not selected"
         };
-        console.log("📤 SUMMARY DATA:", responseBody.data);
+        
+        console.log("📤 SUMMARY DATA:", summaryData);
+        
+        // ✅ ALWAYS RETURN SUMMARY SCREEN
+        const responseBody = { 
+          version: "3.0", 
+          screen: "SUMMARY",
+          data: summaryData 
+        };
         return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
       
       if (data.next?.name === "DETAILS") {
-        responseBody.screen = "DETAILS";
-        responseBody.data = {
+        const detailsData = {
           date: data.payload?.date || data.date,
           time: data.payload?.time || data.time
+        };
+        console.log("📤 DETAILS DATA:", detailsData);
+        const responseBody = { 
+          version: "3.0", 
+          screen: "DETAILS",
+          data: detailsData 
         };
         return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
     }
 
-    // #2 PING
-    if (data.action === "ping") {
-      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
+    // #2 SUMMARY data_exchange (Confirm button)
+    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
+      console.log("✅ CONFIRM BUTTON - TERMINATING!");
+      console.log("📋 Booking Data:", data.data);
+      
+      const responseBody = { 
+        version: "3.0", 
+        type: "TERMINATE",
+        screen: "SUMMARY",
+        data: {
+          name: data.data?.name || data.name,
+          phone: data.data?.phone || data.phone,
+          date: data.data?.date || data.date,
+          time: data.data?.time || data.time,
+          message: "Appointment confirmed successfully! 🎉",
+          extension_message_response: {
+            params: {
+              flow_token: data.flow_token,
+              status: "success"
+            }
+          }
+        }
+      };
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
     // #3 INIT
     if (data.action === "INIT") {
-      responseBody.data = { 
-        date_options: getDynamicDates(), 
-        time_options: getDynamicTimes()
+      console.log("🚀 INIT - Loading screens");
+      const responseBody = { 
+        version: "3.0", 
+        screen: "APPOINTMENT",
+        data: {
+          date_options: getDynamicDates(),
+          time_options: getDynamicTimes()
+        }
       };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
@@ -141,63 +177,33 @@ app.post("/flow", (req, res) => {
       
       if (date && !time) {
         console.log("⏳ Loading times...");
-        responseBody.data = { 
-          date_options: getDynamicDates(), 
-          time_options: getDynamicTimes()
+        const responseBody = {
+          version: "3.0",
+          screen: "APPOINTMENT",
+          data: {
+            date_options: getDynamicDates(),
+            time_options: getDynamicTimes()
+          }
         };
-      } else if (date && time) {
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+      }
+      
+      if (date && time) {
         console.log("✅ → DETAILS");
         bookedSlots.add(`${date}_${time}`);
-        responseBody.screen = "DETAILS";
-        responseBody.data = { date, time };
+        const responseBody = {
+          version: "3.0",
+          screen: "DETAILS",
+          data: { date, time }
+        };
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // 🚨 #5 SUMMARY data_exchange - TERMINATE!
-    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ CONFIRM CLICKED - TERMINATING!");
-      
-      responseBody = { 
-        version: "3.0", 
-        type: "TERMINATE", 
-        screen: "SUMMARY",
-        data: { 
-          name: data.data?.name || data.name,
-          phone: data.data?.phone || data.phone,
-          date: data.data?.date || data.date,
-          time: data.data?.time || data.time,
-          extension_message_response: { 
-            params: { 
-              flow_token: data.flow_token, 
-              status: "success",
-              message: "Appointment booked successfully!"
-            } 
-          } 
-        } 
-      };
-      console.log("📤 TERMINATE RESPONSE:", responseBody.data);
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
+    // Default fallback
+    console.log("⚠️ Default response");
+    res.status(200).send(encryptResponse({ version: "3.0", screen: "APPOINTMENT", data: {} }, aesKey, iv));
 
-    // #6 COMPLETE BOOKING (Footer Confirm button)
-    if (data.action === "complete_booking") {
-      console.log("✅ BOOKING CONFIRMED:", data);
-      responseBody = { 
-        version: "3.0", 
-        type: "TERMINATE", 
-        screen: "SUMMARY",
-        data: { 
-          extension_message_response: { 
-            params: { flow_token: data.flow_token, status: "success" } 
-          } 
-        } 
-      };
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
-    // Default
-    res.status(200).send(encryptResponse(responseBody, aesKey, iv));
   } catch (error) {
     console.error("❌ ERROR:", error);
     res.status(421).send("Error");
