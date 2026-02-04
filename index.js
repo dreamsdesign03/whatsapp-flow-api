@@ -71,17 +71,31 @@ const getDynamicTimes = () => [
 // 4. Main Route
 app.post("/flow", (req, res) => {
     try {
-        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
+        // Health check logic for raw pings
+        if (!req.body.encrypted_flow_data) {
+            return res.status(200).send("Active");
+        }
 
         const { data, aesKey, iv } = decryptRequest(req.body);
         const screen = data.screen;
         const action = data.action;
-        const input = data.data || {}; // Flow mathi aavto data
+        const input = data.data || {}; 
 
         let responseBody = { version: "3.0", screen: screen, data: {} };
 
-        // STEP 1: Pehli screen (APPOINTMENT) load thava mate
-        if (action === "INIT") {
+        // FIX: Aa line badha data formats handle karse
+        const payload = data.data || data.payload || {};
+
+        // 1. Ping / Health Check Handling
+        if (action === "ping" || !screen) {
+            return res.status(200).send(encryptResponse({ 
+                version: "3.0", 
+                data: { status: "active" } 
+            }, aesKey, iv));
+        }
+
+        // 2. APPOINTMENT SCREEN - Dynamic Data Fill
+        if (action === "INIT" || screen === "APPOINTMENT") {
             responseBody.screen = "APPOINTMENT";
             responseBody.data = {
                 department: Object.keys(DEPT_NAMES).map(id => ({ id, title: DEPT_NAMES[id] })),
@@ -92,51 +106,36 @@ app.post("/flow", (req, res) => {
                 is_date_enabled: true,
                 is_time_enabled: true
             };
+            console.log("✅ APPOINTMENT Data Loaded");
         }
 
-        // STEP 2: DETAILS screen par carry forward thava mate (Tamari JSON ma 'navigate' chhe)
-        // Note: Navigate backend call nathi kartu, pan DETAILS screen par dynamic placeholder mate
-        // Jyare 'data_exchange' SUMMARY mate thase tyare backend active thase.
-
-        // STEP 3: SUMMARY Screen (Review Time) - Aa Accurate Logic Chhe
+        // 3. SUMMARY SCREEN - Accurate Review Data
         else if (screen === "DETAILS" && action === "data_exchange") {
-            const deptTitle = DEPT_NAMES[input.department] || input.department;
-            const locTitle = LOC_NAMES[input.location] || input.location;
+            const deptTitle = DEPT_NAMES[payload.department] || payload.department;
+            const locTitle = LOC_NAMES[payload.location] || payload.location;
             
             responseBody.screen = "SUMMARY";
             responseBody.data = {
-                // Formatting for ${data.appointment}
-                appointment: `${deptTitle} Department at ${locTitle}\n${input.date} at ${input.time}.`,
-                
-                // Formatting for ${data.details}
-                details: `Name: ${input.name}\nEmail: ${input.email}\nPhone: ${input.phone}\n\n${input.more_details || ""}`,
-                
-                // Carry forward original values to use in Confirm Appointment footer
-                department: input.department,
-                location: input.location,
-                date: input.date,
-                time: input.time,
-                name: input.name,
-                email: input.email,
-                phone: input.phone,
-                more_details: input.more_details
+                appointment: `${deptTitle} at ${locTitle}\n${payload.date} at ${payload.time}.`,
+                details: `Name: ${payload.name}\nEmail: ${payload.email}\nPhone: ${payload.phone}`,
+                // Passing IDs back for the final submission
+                department: payload.department,
+                location: payload.location,
+                date: payload.date,
+                time: payload.time,
+                name: payload.name,
+                email: payload.email,
+                phone: payload.phone
             };
+            console.log("✅ SUMMARY Data Prepared");
         }
 
-        // STEP 4: Final Confirmation (data_exchange from SUMMARY screen)
+        // 4. FINAL SUBMIT
         else if (screen === "SUMMARY" && action === "data_exchange") {
             return res.status(200).send(encryptResponse({
                 version: "3.0",
                 type: "TERMINATE",
-                data: {
-                    extension_message_response: {
-                        params: {
-                            flow_token: data.flow_token,
-                            status: "success",
-                            message: "✅ Appointment Confirmed!"
-                        }
-                    }
-                }
+                data: { extension_message_response: { params: { status: "success", message: "Success!" } } }
             }, aesKey, iv));
         }
 
