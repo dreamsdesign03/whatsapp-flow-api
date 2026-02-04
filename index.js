@@ -84,30 +84,38 @@ app.post("/flow", (req, res) => {
     if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
     const { data, aesKey, iv } = decryptRequest(req.body);
-    console.log("📥 Action:", data.action);
+    console.log("📥 Action:", data.action, "Screen:", data.screen);
     console.log("📥 Full Data:", JSON.stringify(data, null, 2));
 
     let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-    // 🚨 #1 NAVIGATE - DETAILS → SUMMARY (TOP PRIORITY!)
+    // 🚨 #1 NAVIGATE - DETAILS → SUMMARY
     if (data.action === "navigate") {
       console.log("🔄 NAVIGATE:", JSON.stringify(data.next));
       
       if (data.next?.name === "SUMMARY") {
-        // Multiple data sources check
-        const formData = data.payload || data.data || data.form || {};
-        console.log("✅ FORM DATA:", formData);
+        const payload = data.payload || {};
+        console.log("✅ SUMMARY PAYLOAD:", payload);
         
         responseBody.screen = "SUMMARY";
         responseBody.data = {
-          name: formData.name || formData.details_form?.name || "John Doe",
-          phone: formData.phone || formData.details_form?.phone || "919999999999",
-          date: formData.date || data.data?.date || "2026-02-05",
-          time: formData.time || data.data?.time || "12:00 PM"
+          name: payload.name || payload.details_form?.name || "Not provided",
+          phone: payload.phone || payload.details_form?.phone || "Not provided",
+          date: payload.date || data.data?.date || "Not selected",
+          time: payload.time || data.data?.time || "Not selected"
         };
-        console.log("📤 SUMMARY SENT:", responseBody.data);
+        console.log("📤 SUMMARY DATA:", responseBody.data);
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+      
+      if (data.next?.name === "DETAILS") {
+        responseBody.screen = "DETAILS";
+        responseBody.data = {
+          date: data.payload?.date || data.date,
+          time: data.payload?.time || data.time
+        };
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+      }
     }
 
     // #2 PING
@@ -115,48 +123,66 @@ app.post("/flow", (req, res) => {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    // #3 INIT - Load dates
+    // #3 INIT
     if (data.action === "INIT") {
       responseBody.data = { 
         date_options: getDynamicDates(), 
-        time_options: [] 
+        time_options: getDynamicTimes()
       };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #4 APPOINTMENT - Date/Time handling
+    // #4 APPOINTMENT data_exchange
     if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
       const date = data.date || data.data?.date;
       const time = data.time || data.data?.time;
       
-      console.log("📅 Date:", date, "🕒 Time:", time);
-
-      // Date+Time → DETAILS
-      if (date && time) {
+      console.log("📅 APPOINTMENT:", { date, time });
+      
+      if (date && !time) {
+        console.log("⏳ Loading times...");
+        responseBody.data = { 
+          date_options: getDynamicDates(), 
+          time_options: getDynamicTimes()
+        };
+      } else if (date && time) {
         console.log("✅ → DETAILS");
         bookedSlots.add(`${date}_${time}`);
         responseBody.screen = "DETAILS";
         responseBody.data = { date, time };
-      } 
-      // Date only → Load times
-      else if (date) {
-        console.log("⏳ Loading times...");
-        const availableTimes = getDynamicTimes().filter(
-          t => !bookedSlots.has(`${date}_${t.id}`
-        ));
-        responseBody.data = { 
-          date_options: getDynamicDates(), 
-          time_options: availableTimes 
-        };
       }
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #5 COMPLETE BOOKING
-    if (data.action === "complete_booking") {
-      const bookingData = data.data || data;
-      console.log("✅ BOOKING CONFIRMED:", bookingData);
+    // 🚨 #5 SUMMARY data_exchange - TERMINATE!
+    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
+      console.log("✅ CONFIRM CLICKED - TERMINATING!");
       
+      responseBody = { 
+        version: "3.0", 
+        type: "TERMINATE", 
+        screen: "SUMMARY",
+        data: { 
+          name: data.data?.name || data.name,
+          phone: data.data?.phone || data.phone,
+          date: data.data?.date || data.date,
+          time: data.data?.time || data.time,
+          extension_message_response: { 
+            params: { 
+              flow_token: data.flow_token, 
+              status: "success",
+              message: "Appointment booked successfully!"
+            } 
+          } 
+        } 
+      };
+      console.log("📤 TERMINATE RESPONSE:", responseBody.data);
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // #6 COMPLETE BOOKING (Footer Confirm button)
+    if (data.action === "complete_booking") {
+      console.log("✅ BOOKING CONFIRMED:", data);
       responseBody = { 
         version: "3.0", 
         type: "TERMINATE", 
@@ -170,14 +196,14 @@ app.post("/flow", (req, res) => {
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // Default fallback
+    // Default
     res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-
   } catch (error) {
     console.error("❌ ERROR:", error);
     res.status(421).send("Error");
   }
 });
+
 
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
