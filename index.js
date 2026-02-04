@@ -132,17 +132,17 @@ app.post("/flow", (req, res) => {
         };
       } 
   // Only date = Load times (existing logic)
-      else if (selectedDate && !selectedTime) {
-        console.log("⏳ Only Date → Loading Times");
-        const availableTimes = getDynamicTimes().filter(
-          (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-        );
-        responseBody.screen = "APPOINTMENT";
-        responseBody.data = {
-          date_options: getDynamicDates(),
-          time_options: availableTimes
-        };
-      }
+          else if (selectedDate && !selectedTime) {
+            console.log("⏳ Only Date → Loading Times");
+            const availableTimes = getDynamicTimes().filter(
+              (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
+            );
+            responseBody.screen = "APPOINTMENT";
+            responseBody.data = {
+              date_options: getDynamicDates(),
+              time_options: availableTimes
+            };
+          }
         else if (data.action === "time_selected") {
           const selectedDate = data.date;
           const selectedTime = data.time;
@@ -158,49 +158,54 @@ app.post("/flow", (req, res) => {
             time: selectedTime
           };
         }
-    // 4️⃣ DETAILS → SUMMARY navigation (🚨 MAIN FIX)
-    else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
-      const detailsData = data.payload || {};  // ✅ FIXED: Declare first
-      console.log("✅ DETAILS Form Data:", detailsData);
-      
-      responseBody.screen = "SUMMARY";
-      responseBody.data = {
-        name: detailsData.name || "",
-        phone: detailsData.phone || "",
-        date: detailsData.date || "",
-        time: detailsData.time || ""
-      };
-    }
-
-    // 5️⃣ Final booking confirmation
-    else if (data.action === "complete_booking") {
-      const bookingData = data.data || data;
-      bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
-      console.log("✅ FINAL Booking Confirmed:", bookingData);
-
-      responseBody = {
-        version: "3.0",
-        type: "TERMINATE",
-        screen: "SUMMARY",
-        data: {
-          extension_message_response: {
-            params: {
-              flow_token: data.flow_token,
-              status: "success"
-            }
+        // 🚨 MAIN FIX: DETAILS form → SUMMARY navigation
+        else if (data.action === "navigate") {
+          console.log("🔄 NAVIGATION DETECTED:", data.next?.name);
+          
+          if (data.next?.name === "SUMMARY") {
+            const detailsData = data.payload || data.data || data;
+            console.log("✅ DETAILS DATA RECEIVED:", detailsData);
+            
+            responseBody.screen = "SUMMARY";
+            responseBody.data = {
+              name: detailsData.name || detailsData.form?.name || "",
+              phone: detailsData.phone || detailsData.form?.phone || "",
+              date: detailsData.date || detailsData.form?.date || "",
+              time: detailsData.time || detailsData.form?.time || ""
+            };
+            console.log("📤 SUMMARY DATA SENT:", responseBody.data);
           }
         }
-      };
+
+        // 5️⃣ Final booking confirmation
+        else if (data.action === "complete_booking") {
+          const bookingData = data.data || data;
+          bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
+          console.log("✅ FINAL Booking Confirmed:", bookingData);
+    
+          responseBody = {
+            version: "3.0",
+            type: "TERMINATE",
+            screen: "SUMMARY",
+            data: {
+              extension_message_response: {
+                params: {
+                  flow_token: data.flow_token,
+                  status: "success"
+                }
+              }
+            }
+          };
+        }
+        else {
+        console.log("⏳ Partial selection → Stay APPOINTMENT");
+        responseBody.screen = "APPOINTMENT";
+        responseBody.data = {
+          date_options: getDynamicDates(),
+          time_options: getDynamicTimes()
+        };
+      }
     }
-    else {
-    console.log("⏳ Partial selection → Stay APPOINTMENT");
-    responseBody.screen = "APPOINTMENT";
-    responseBody.data = {
-      date_options: getDynamicDates(),
-      time_options: getDynamicTimes()
-    };
-  }
-}
             
     res.setHeader("Content-Type", "text/plain");
     return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
