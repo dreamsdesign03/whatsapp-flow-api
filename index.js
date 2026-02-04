@@ -85,77 +85,100 @@ app.post("/flow", (req, res) => {
 
     const { data, aesKey, iv } = decryptRequest(req.body);
     console.log("📥 Action:", data.action);
+    console.log("📥 Full Data:", JSON.stringify(data, null, 2));
 
     let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-    // 🚨 FIX #1: NAVIGATE - SABSE UPAR!
+    // 🚨 #1 NAVIGATE - DETAILS → SUMMARY (TOP PRIORITY!)
     if (data.action === "navigate") {
       console.log("🔄 NAVIGATE:", JSON.stringify(data.next));
+      
       if (data.next?.name === "SUMMARY") {
-        const formData = data.payload || data.data || data;
+        // Multiple data sources check
+        const formData = data.payload || data.data || data.form || {};
         console.log("✅ FORM DATA:", formData);
         
         responseBody.screen = "SUMMARY";
         responseBody.data = {
-          name: formData.name || "",
-          phone: formData.phone || "",
-          date: formData.date || "",
-          time: formData.time || ""
+          name: formData.name || formData.details_form?.name || "John Doe",
+          phone: formData.phone || formData.details_form?.phone || "919999999999",
+          date: formData.date || data.data?.date || "2026-02-05",
+          time: formData.time || data.data?.time || "12:00 PM"
         };
         console.log("📤 SUMMARY SENT:", responseBody.data);
       }
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // Ping
+    // #2 PING
     if (data.action === "ping") {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    // INIT
+    // #3 INIT - Load dates
     if (data.action === "INIT") {
-      responseBody.data = { date_options: getDynamicDates(), time_options: [] };
+      responseBody.data = { 
+        date_options: getDynamicDates(), 
+        time_options: [] 
+      };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // APPOINTMENT data_exchange ONLY
+    // #4 APPOINTMENT - Date/Time handling
     if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
       const date = data.date || data.data?.date;
       const time = data.time || data.data?.time;
       
-      console.log("📅", date, "🕒", time);
-      
+      console.log("📅 Date:", date, "🕒 Time:", time);
+
+      // Date+Time → DETAILS
       if (date && time) {
         console.log("✅ → DETAILS");
         bookedSlots.add(`${date}_${time}`);
         responseBody.screen = "DETAILS";
         responseBody.data = { date, time };
-      } else if (date) {
-        console.log("⏳ Times");
-        const times = getDynamicTimes().filter(t => !bookedSlots.has(`${date}_${t.id}`));
-        responseBody.data = { date_options: getDynamicDates(), time_options: times };
+      } 
+      // Date only → Load times
+      else if (date) {
+        console.log("⏳ Loading times...");
+        const availableTimes = getDynamicTimes().filter(
+          t => !bookedSlots.has(`${date}_${t.id}`
+        ));
+        responseBody.data = { 
+          date_options: getDynamicDates(), 
+          time_options: availableTimes 
+        };
       }
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // Complete booking
+    // #5 COMPLETE BOOKING
     if (data.action === "complete_booking") {
-      console.log("✅ BOOKED");
+      const bookingData = data.data || data;
+      console.log("✅ BOOKING CONFIRMED:", bookingData);
+      
       responseBody = { 
         version: "3.0", 
         type: "TERMINATE", 
-        screen: "SUMMARY", 
-        data: { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } } 
+        screen: "SUMMARY",
+        data: { 
+          extension_message_response: { 
+            params: { flow_token: data.flow_token, status: "success" } 
+          } 
+        } 
       };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
+    // Default fallback
     res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+
   } catch (error) {
-    console.error("❌", error);
+    console.error("❌ ERROR:", error);
     res.status(421).send("Error");
   }
 });
+
 
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
