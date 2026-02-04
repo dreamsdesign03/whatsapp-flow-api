@@ -208,58 +208,42 @@ app.post("/flow", (req, res) => {
 
         // SUMMARY
         // #4 SUMMARY SCREEN - FULL DEBUG VERSION
-        if (data.screen === "SUMMARY") {
-            console.log("\n📋 === SUMMARY DEBUG ===");
-            console.log("🔍 COMPLETE DATA:", JSON.stringify(data, null, 2));
-            
-            // Try EVERY possible data location
-            const getValue = (field) => {
-                return data.data?.[field] || 
-                       data.payload?.[field] || 
-                       data.data?.payload?.[field] ||
-                       data.payload?.data?.[field] ||
-                       data.data?.form?.[field] ||
-                       "";
-            };
+       if (data.screen === "SUMMARY") {
+            console.log("📋 SUMMARY RAW DATA:", JSON.stringify(data, null, 2));
             
             const bookingData = {
-                department: getValue('department'),
-                location: getValue('location'),
-                date: getValue('date'),
-                time: getValue('time'),
-                name: getValue('name'),
-                phone: getValue('phone'),
-                email: getValue('email')
+                department: data.data?.department || data.payload?.department || "",
+                location: data.data?.location || data.payload?.location || "",
+                date: data.data?.date || data.payload?.date || "",
+                time: data.data?.time || data.payload?.time || "",
+                name: data.data?.name || data.payload?.name || "",
+                phone: data.data?.phone || data.payload?.phone || "",
+                email: data.data?.email || data.payload?.email || ""
             };
             
-            console.log("📦 EXTRACTED:", bookingData);
+            // Create formatted text
+            const appointment = `${DEPT_NAMES[bookingData.department] || bookingData.department} Department`;
+            const details = `Name: ${bookingData.name}\nPhone: ${bookingData.phone}`;
             
-            const appointmentText = bookingData.department && bookingData.location 
-                ? `${DEPT_NAMES[bookingData.department] || bookingData.department} at ${LOC_NAMES[bookingData.location] || bookingData.location}`
-                : "No appointment selected";
-                
-            const detailsText = bookingData.name 
-                ? `${bookingData.name}\n${bookingData.phone}\n${bookingData.email || 'No email'}`
-                : "Please enter your details";
+            console.log("📦 bookingData:", bookingData);
+            console.log("📝 appointment:", appointment);
+            console.log("📝 details:", details);
             
-            console.log("📝 APPOINTMENT:", appointmentText);
-            console.log("📝 DETAILS:", detailsText);
-        
             responseBody.data = {
-                department: bookingData.department || "",
-                location: bookingData.location || "",
-                date: bookingData.date || "",
-                time: bookingData.time || "",
-                name: bookingData.name || "",
-                phone: bookingData.phone || "",
-                email: bookingData.email || "",
-                appointment: appointmentText,
-                details: detailsText
+                department: bookingData.department,
+                location: bookingData.location,
+                date: bookingData.date,
+                time: bookingData.time,
+                name: bookingData.name,
+                phone: bookingData.phone,
+                email: bookingData.email,
+                appointment: appointment,
+                details: details
             };
             
-            console.log("✅ SUMMARY SENT:", responseBody.data.appointment);
             return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
         }
+        
 
         // CONFIRM
         if (data.action === "data_exchange" && data.payload?.action === "confirm_booking") {
