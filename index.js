@@ -6,281 +6,146 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// Fix for OpenSSL 3.0 on Render/Modern Node.js
-process.env.NODE_OPTIONS = '--openssl-legacy-provider';
+// 1. Data Mappings (Summary screen par text lakhva mate)
+const DEPT_NAMES = {
+    shopping: "Shopping & Groceries",
+    clothing: "Clothing & Apparel",
+    home: "Home Goods & Decor",
+    electronics: "Electronics & Appliances",
+    beauty: "Beauty & Personal Care"
+};
 
+const LOC_NAMES = {
+    "1": "King’s Cross, London",
+    "2": "Oxford Street, London",
+    "3": "Covent Garden, London",
+    "4": "Piccadilly Circus, London"
+};
+
+// 2. Encryption/Decryption Helpers (Tamari existing logic mujab)
 const rawKey = process.env.PRIVATE_KEY || "";
-let PRIVATE_KEY = "";
+const PRIVATE_KEY = formatPrivateKey(rawKey);
 
-// PEM format converter with better error handling
 function formatPrivateKey(key) {
-    if (!key) {
-        console.log("⚠️ PRIVATE_KEY not found in env");
-        return "";
-    }
-    
-    try {
-        if (key.includes('BEGIN PRIVATE KEY')) return key;
-        const cleanedKey = key.replace(/\\n/g, '\n').replace(/\\s/g, '');
-        const wrappedKey = cleanedKey.match(/.{1,64}/g)?.join('\n') || cleanedKey;
-        return `-----BEGIN PRIVATE KEY-----\n${wrappedKey}\n-----END PRIVATE KEY-----`;
-    } catch (e) {
-        console.error("❌ Key format error:", e.message);
-        return "";
-    }
+    if (!key) return "";
+    if (key.includes('BEGIN PRIVATE KEY')) return key;
+    const wrappedKey = key.replace(/\\n/g, '\n').match(/.{1,64}/g)?.join('\n') || key;
+    return `-----BEGIN PRIVATE KEY-----\n${wrappedKey}\n-----END PRIVATE KEY-----`;
 }
 
-PRIVATE_KEY = formatPrivateKey(rawKey);
-console.log("🔑 Private key loaded:", PRIVATE_KEY ? "✅ YES" : "❌ NO");
-
-// 🔐 FIXED Crypto helpers with error handling
 function decryptRequest(body) {
-    console.log("🔓 Attempting decryption...");
-    
-    try {
-        const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
-        
-        if (!encrypted_aes_key || !encrypted_flow_data || !initial_vector) {
-            throw new Error("Missing encryption fields");
-        }
-
-        // Try different padding methods for compatibility
-        const decryptOptions = [
-            { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
-            { padding: crypto.constants.RSA_PKCS1_PADDING, oaepHash: "sha1" },
-            { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING }
-        ];
-
-        let aesKey;
-        for (const options of decryptOptions) {
-            try {
-                aesKey = crypto.privateDecrypt(
-                    { key: PRIVATE_KEY, ...options },
-                    Buffer.from(encrypted_aes_key, "base64")
-                );
-                console.log("✅ Decryption successful with options:", options);
-                break;
-            } catch (e) {
-                console.log("⚠️ Padding failed:", options.padding, e.message);
-                continue;
-            }
-        }
-
-        if (!aesKey) {
-            throw new Error("All decryption methods failed");
-        }
-
-        const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
-        const ivBuffer = Buffer.from(initial_vector, "base64");
-        const tag = flowDataBuffer.slice(-16);
-        const encryptedData = flowDataBuffer.slice(0, -16);
-
-        const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
-        decipher.setAuthTag(tag);
-        
-        const decryptedData = JSON.parse(
-            Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8")
-        );
-        
-        console.log("✅ Full decryption successful. Data keys:", Object.keys(decryptedData));
-        return { data: decryptedData, aesKey, iv: ivBuffer };
-        
-    } catch (error) {
-        console.error("💥 DECRYPTION FAILED:", error.message);
-        throw error;
-    }
+    const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+    const aesKey = crypto.privateDecrypt(
+        { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+        Buffer.from(encrypted_aes_key, "base64")
+    );
+    const flowDataBuffer = Buffer.from(encrypted_flow_data, "base64");
+    const ivBuffer = Buffer.from(initial_vector, "base64");
+    const tag = flowDataBuffer.slice(-16);
+    const encryptedData = flowDataBuffer.slice(0, -16);
+    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, ivBuffer);
+    decipher.setAuthTag(tag);
+    const decryptedData = JSON.parse(Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf-8"));
+    return { data: decryptedData, aesKey, iv: ivBuffer };
 }
 
 function encryptResponse(data, aesKey, iv) {
-    try {
-        const flippedIv = Buffer.from(iv.map((b) => ~b));
-        const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
-        return Buffer.concat([
-            cipher.update(JSON.stringify(data), "utf8"), 
-            cipher.final(), 
-            cipher.getAuthTag()
-        ]).toString("base64");
-    } catch (error) {
-        console.error("💥 ENCRYPTION FAILED:", error.message);
-        throw error;
-    }
+    const flippedIv = Buffer.from(iv.map((b) => ~b));
+    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+    return Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
 }
 
-// Dynamic data generators (same as before)
-function getDynamicDates() {
-    const options = [];
-    let d = new Date();
-    for (let i = 0; i < 14 && options.length < 7; i++) {
-        if (d.getDay() !== 0 && d.getDay() !== 6) {
-            const dateStr = d.toISOString().split('T')[0];
-            options.push({ 
-                id: dateStr,
-                title: d.toLocaleDateString('en-IN', { 
-                    weekday: 'short', day: 'numeric', month: 'short' 
-                })
-            });
-        }
-        d.setDate(d.getDate() + 1);
-    }
-    return options;
-}
-
-function getDynamicTimes() {
-    const slots = [];
-    for (let h = 10; h <= 20; h++) {
-        ["00", "30"].forEach(m => {
-            if (slots.length < 12) {
-                const hour12 = h % 12 || 12;
-                const ampm = h >= 12 ? "PM" : "AM";
-                slots.push({ id: `${h}:${m}`, title: `${hour12}:${m} ${ampm}` });
-            }
-        });
-    }
-    return slots;
-}
-
-const DEPARTMENTS = [
-    { id: "haircut", title: "Haircut & Styling" },
-    { id: "beauty", title: "Beauty & Makeup" },
-    { id: "spa", title: "Spa & Massage" },
-    { id: "manicure", title: "Manicure & Pedicure" }
+// 3. Dynamic Option Generators
+const getDynamicDates = () => [
+    { id: "2026-02-05", title: "Thu Feb 05 2026" },
+    { id: "2026-02-06", title: "Fri Feb 06 2026" },
+    { id: "2026-02-07", title: "Sat Feb 07 2026" }
 ];
 
-const LOCATIONS = [
-    { id: "1", title: "Vadodara - Alkapuri" },
-    { id: "2", title: "Vadodara - Fatehgunj" },
-    { id: "3", title: "Vadodara - Gotri" }
+const getDynamicTimes = () => [
+    { id: "10:30", title: "10:30 AM" },
+    { id: "11:30", title: "11:30 AM" },
+    { id: "12:30", title: "12:30 PM" }
 ];
 
-const DEPT_NAMES = { haircut: "Haircut & Styling", beauty: "Beauty & Makeup", spa: "Spa & Massage", manicure: "Manicure & Pedicure" };
-const LOC_NAMES = { "1": "Vadodara - Alkapuri", "2": "Vadodara - Fatehgunj", "3": "Vadodara - Gotri" };
-
+// 4. Main Route
 app.post("/flow", (req, res) => {
     try {
-        console.log("\n🚀 === NEW REQUEST ===");
-        
-        // HEALTH CHECK - Return "Active" for ping without encryption
-        if (!req.body.encrypted_flow_data) {
-            console.log("🏓 HEALTH CHECK - Returning Active");
-            return res.status(200).send("Active");
-        }
+        if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
-        console.log("📡 Encrypted request received");
         const { data, aesKey, iv } = decryptRequest(req.body);
-        
-        console.log("📱 Screen:", data.screen || "APPOINTMENT");
-        console.log("⚡ Action:", data.action || "NONE");
+        const screen = data.screen;
+        const action = data.action;
+        const input = data.data || {}; // Flow mathi aavto data
 
-        let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
+        let responseBody = { version: "3.0", screen: screen, data: {} };
 
-        // PING
-        if (data.action === "ping") {
-            return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
-        }
-
-        // APPOINTMENT
-        if (data.screen === "APPOINTMENT" || data.action === "INIT") {
+        // STEP 1: Pehli screen (APPOINTMENT) load thava mate
+        if (action === "INIT") {
+            responseBody.screen = "APPOINTMENT";
             responseBody.data = {
-                department: DEPARTMENTS,
-                location: LOCATIONS,
+                department: Object.keys(DEPT_NAMES).map(id => ({ id, title: DEPT_NAMES[id] })),
+                location: Object.keys(LOC_NAMES).map(id => ({ id, title: LOC_NAMES[id] })),
                 date: getDynamicDates(),
-                time: getDynamicTimes()
+                time: getDynamicTimes(),
+                is_location_enabled: true,
+                is_date_enabled: true,
+                is_time_enabled: true
             };
-            console.log("✅ APPOINTMENT data sent");
-            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
         }
 
-        // DETAILS
-        if (data.screen === "DETAILS") {
-            const appointmentData = {
-                department: data.payload?.department || data.data?.department || "",
-                location: data.payload?.location || data.data?.location || "",
-                date: data.payload?.date || data.data?.date || "",
-                time: data.payload?.time || data.data?.time || "",
-                name: data.payload?.name || data.data?.name || "",
-                phone: data.payload?.phone || data.data?.phone || "",
-                email: data.payload?.email || data.data?.email || ""
-            };
-            responseBody.data = appointmentData;
-            console.log("✅ DETAILS data sent");
-            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-        }
+        // STEP 2: DETAILS screen par carry forward thava mate (Tamari JSON ma 'navigate' chhe)
+        // Note: Navigate backend call nathi kartu, pan DETAILS screen par dynamic placeholder mate
+        // Jyare 'data_exchange' SUMMARY mate thase tyare backend active thase.
 
-        // SUMMARY
-        // #4 SUMMARY SCREEN - FULL DEBUG VERSION
-       if (data.screen === "SUMMARY") {
-            console.log("📋 SUMMARY RAW DATA:", JSON.stringify(data, null, 2));
+        // STEP 3: SUMMARY Screen (Review Time) - Aa Accurate Logic Chhe
+        else if (screen === "DETAILS" && action === "data_exchange") {
+            const deptTitle = DEPT_NAMES[input.department] || input.department;
+            const locTitle = LOC_NAMES[input.location] || input.location;
             
-            const bookingData = {
-                department: data.data?.department || data.payload?.department || "",
-                location: data.data?.location || data.payload?.location || "",
-                date: data.data?.date || data.payload?.date || "",
-                time: data.data?.time || data.payload?.time || "",
-                name: data.data?.name || data.payload?.name || "",
-                phone: data.data?.phone || data.payload?.phone || "",
-                email: data.data?.email || data.payload?.email || ""
-            };
-            
-            // Create formatted text
-            const appointment = `${DEPT_NAMES[bookingData.department] || bookingData.department} Department`;
-            const details = `Name: ${bookingData.name}\nPhone: ${bookingData.phone}`;
-            
-            console.log("📦 bookingData:", bookingData);
-            console.log("📝 appointment:", appointment);
-            console.log("📝 details:", details);
-            
+            responseBody.screen = "SUMMARY";
             responseBody.data = {
-                department: bookingData.department,
-                location: bookingData.location,
-                date: bookingData.date,
-                time: bookingData.time,
-                name: bookingData.name,
-                phone: bookingData.phone,
-                email: bookingData.email,
-                appointment: appointment,
-                details: details
+                // Formatting for ${data.appointment}
+                appointment: `${deptTitle} Department at ${locTitle}\n${input.date} at ${input.time}.`,
+                
+                // Formatting for ${data.details}
+                details: `Name: ${input.name}\nEmail: ${input.email}\nPhone: ${input.phone}\n\n${input.more_details || ""}`,
+                
+                // Carry forward original values to use in Confirm Appointment footer
+                department: input.department,
+                location: input.location,
+                date: input.date,
+                time: input.time,
+                name: input.name,
+                email: input.email,
+                phone: input.phone,
+                more_details: input.more_details
             };
-            
-            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
         }
-        
 
-        // CONFIRM
-        if (data.action === "data_exchange" && data.payload?.action === "confirm_booking") {
-            console.log("🎉 BOOKING CONFIRMED:", data.data);
-            responseBody = {
+        // STEP 4: Final Confirmation (data_exchange from SUMMARY screen)
+        else if (screen === "SUMMARY" && action === "data_exchange") {
+            return res.status(200).send(encryptResponse({
                 version: "3.0",
                 type: "TERMINATE",
-                screen: "SUMMARY",
                 data: {
                     extension_message_response: {
                         params: {
                             flow_token: data.flow_token,
                             status: "success",
-                            message: `✅ *Appointment Booked!*\n\n👤 ${data.data?.name}\n📅 ${data.data?.date} ${data.data?.time}`
+                            message: "✅ Appointment Confirmed!"
                         }
                     }
                 }
-            };
-            return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+            }, aesKey, iv));
         }
 
-        console.log("⚠️ Unknown request");
-        res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
     } catch (error) {
-        console.error("💥 CRITICAL ERROR:", error.message);
-        
-        // For health check failures, return "Active" anyway
-        if (!req.body.encrypted_flow_data) {
-            return res.status(200).send("Active");
-        }
-        
+        console.error("💥 Error:", error.message);
         res.status(421).send("Error");
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log("✅ OpenSSL legacy provider enabled");
-});
+app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
