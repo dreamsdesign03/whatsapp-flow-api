@@ -141,6 +141,21 @@ app.post("/flow", (req, res) => {
           time_options: availableTimes
         };
       }
+        else if (data.action === "time_selected") {
+          const selectedDate = data.date;
+          const selectedTime = data.time;
+          
+          console.log("🕒 TIME SELECTED:", selectedTime);
+          console.log("📅 Date:", selectedDate);
+          
+          // Mark slot booked + Go to DETAILS
+          bookedSlots.add(`${selectedDate}_${selectedTime}`);
+          responseBody.screen = "DETAILS";
+          responseBody.data = {
+            date: selectedDate,
+            time: selectedTime
+          };
+        }
     // 4️⃣ DETAILS → SUMMARY navigation (🚨 MAIN FIX)
     else if (data.action === "navigate" && data.next?.name === "SUMMARY") {
       const detailsData = data.payload || {};  // ✅ FIXED: Declare first
