@@ -84,131 +84,142 @@ app.post("/flow", (req, res) => {
     if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
     const { data, aesKey, iv } = decryptRequest(req.body);
-    console.log("📥 Action:", data.action, "Screen:", data.screen);
-    console.log("📥 Full Data:", JSON.stringify(data, null, 2));
+    console.log("🔍 RAW DATA:", JSON.stringify(data, null, 2));
 
-    // 🚨 #1 NAVIGATE - ALWAYS RETURN RESPONSE!
+    // 🚨 ALWAYS LOG THESE FIRST
+    console.log("📱 Screen:", data.screen || "NONE");
+    console.log("⚡ Action:", data.action);
+    console.log("📦 Payload:", data.payload || "EMPTY");
+    console.log("📋 Data:", data.data || "EMPTY");
+
+    let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
+
+    // #1 NAVIGATE HANDLER - TOP PRIORITY!
     if (data.action === "navigate") {
-      console.log("🔄 NAVIGATE:", data.next?.name);
+      console.log("🚀 NAVIGATE DETECTED! Next:", data.next?.name);
       
       if (data.next?.name === "SUMMARY") {
-        const payload = data.payload || data.data || {};
-        console.log("✅ SUMMARY PAYLOAD:", payload);
+        console.log("🎉 DETAILS → SUMMARY!");
         
+        // TRY ALL POSSIBLE DATA SOURCES
         const summaryData = {
-          name: payload.name || payload.details_form?.name || "Not provided",
-          phone: payload.phone || payload.details_form?.phone || "Not provided",
-          date: payload.date || payload.data?.date || "Not selected",
-          time: payload.time || payload.data?.time || "Not selected"
+          name: data.payload?.name || 
+                data.data?.name || 
+                data.form?.name || 
+                data.details_form?.name || 
+                "Not provided",
+          phone: data.payload?.phone || 
+                 data.data?.phone || 
+                 data.form?.phone || 
+                 data.details_form?.phone || 
+                 "Not provided",
+          date: data.payload?.date || 
+                data.data?.date || 
+                data.date || 
+                "Not selected",
+          time: data.payload?.time || 
+               data.data?.time || 
+               data.time || 
+               "Not selected"
         };
         
-        console.log("📤 SUMMARY DATA:", summaryData);
+        console.log("✅ SUMMARY DATA PREPARED:", summaryData);
         
-        // ✅ ALWAYS RETURN SUMMARY SCREEN
-        const responseBody = { 
-          version: "3.0", 
+        responseBody = {
+          version: "3.0",
           screen: "SUMMARY",
-          data: summaryData 
+          data: summaryData
         };
+        
+        console.log("📤 SENDING SUMMARY:", responseBody);
         return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
-      
+
       if (data.next?.name === "DETAILS") {
-        const detailsData = {
+        console.log("✅ APPOINTMENT → DETAILS");
+        responseBody.screen = "DETAILS";
+        responseBody.data = {
           date: data.payload?.date || data.date,
           time: data.payload?.time || data.time
-        };
-        console.log("📤 DETAILS DATA:", detailsData);
-        const responseBody = { 
-          version: "3.0", 
-          screen: "DETAILS",
-          data: detailsData 
         };
         return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
     }
 
-    // #2 SUMMARY data_exchange (Confirm button)
-    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ CONFIRM BUTTON - TERMINATING!");
-      console.log("📋 Booking Data:", data.data);
-      
-      const responseBody = { 
-        version: "3.0", 
-        type: "TERMINATE",
-        screen: "SUMMARY",
-        data: {
-          name: data.data?.name || data.name,
-          phone: data.data?.phone || data.phone,
-          date: data.data?.date || data.date,
-          time: data.data?.time || data.time,
-          message: "Appointment confirmed successfully! 🎉",
-          extension_message_response: {
-            params: {
-              flow_token: data.flow_token,
-              status: "success"
-            }
-          }
-        }
-      };
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    // #2 PING
+    if (data.action === "ping") {
+      console.log("🏓 PING");
+      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
     // #3 INIT
     if (data.action === "INIT") {
-      console.log("🚀 INIT - Loading screens");
-      const responseBody = { 
-        version: "3.0", 
-        screen: "APPOINTMENT",
-        data: {
-          date_options: getDynamicDates(),
-          time_options: getDynamicTimes()
-        }
+      console.log("🚀 INIT - Loading dates/times");
+      responseBody.data = { 
+        date_options: getDynamicDates(), 
+        time_options: getDynamicTimes()
       };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #4 APPOINTMENT data_exchange
+    // #4 SUMMARY data_exchange (Confirm button)
+    if (data.action === "data_exchange" && data.screen === "SUMMARY") {
+      console.log("✅ CONFIRM BUTTON - TERMINATING!");
+      console.log("📋 SUMMARY DATA:", data.data);
+      
+      responseBody = { 
+        version: "3.0", 
+        type: "TERMINATE",
+        screen: "SUMMARY",
+        data: {
+          name: data.data?.name || data.name || "Not provided",
+          phone: data.data?.phone || data.phone || "Not provided", 
+          date: data.data?.date || data.date || "Not selected",
+          time: data.data?.time || data.time || "Not selected",
+          extension_message_response: {
+            params: {
+              flow_token: data.flow_token,
+              status: "success",
+              message: "Appointment confirmed! We'll see you soon."
+            }
+          }
+        }
+      };
+      console.log("🛑 TERMINATE SENT");
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // #5 APPOINTMENT data_exchange
     if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
       const date = data.date || data.data?.date;
       const time = data.time || data.data?.time;
       
       console.log("📅 APPOINTMENT:", { date, time });
       
-      if (date && !time) {
-        console.log("⏳ Loading times...");
-        const responseBody = {
-          version: "3.0",
-          screen: "APPOINTMENT",
-          data: {
-            date_options: getDynamicDates(),
-            time_options: getDynamicTimes()
-          }
-        };
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-      }
-      
       if (date && time) {
-        console.log("✅ → DETAILS");
+        console.log("✅ FULL SELECTION → DETAILS");
         bookedSlots.add(`${date}_${time}`);
-        const responseBody = {
-          version: "3.0",
-          screen: "DETAILS",
-          data: { date, time }
+        responseBody.screen = "DETAILS";
+        responseBody.data = { date, time };
+      } else if (date) {
+        console.log("⏳ DATE ONLY → Loading times");
+        responseBody.data = {
+          date_options: getDynamicDates(),
+          time_options: getDynamicTimes()
         };
-        return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
       }
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // Default fallback
-    console.log("⚠️ Default response");
-    res.status(200).send(encryptResponse({ version: "3.0", screen: "APPOINTMENT", data: {} }, aesKey, iv));
+    console.log("⚠️ FALLBACK RESPONSE");
+    res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
   } catch (error) {
-    console.error("❌ ERROR:", error);
+    console.error("💥 ERROR:", error);
     res.status(421).send("Error");
   }
 });
+
 
 
 
