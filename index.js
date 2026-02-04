@@ -87,85 +87,150 @@ app.post("/flow", (req, res) => {
     console.log("🔍 RAW DATA:", JSON.stringify(data, null, 2));
     console.log("📱 Screen:", data.screen || "NONE");
     console.log("⚡ Action:", data.action);
-    console.log("📦 Payload:", data.payload || "EMPTY");
 
     let responseBody = { version: "3.0", screen: data.screen || "APPOINTMENT", data: {} };
 
-    // 🚀 NEW: Handle custom navigation actions
-    if (data.action === "go_to_summary") {
-      console.log("🎉 GO TO SUMMARY!");
-      responseBody.screen = "SUMMARY";
-      responseBody.data = {
-        name: data.payload?.name || data.name || "Not provided",
-        phone: data.payload?.phone || data.phone || "Not provided",
-        date: data.payload?.date || data.date || "Not selected", 
-        time: data.payload?.time || data.time || "Not selected"
-      };
-      console.log("✅ SUMMARY DATA:", responseBody.data);
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
-    if (data.action === "go_to_details") {
-      console.log("✅ GO TO DETAILS!");
-      bookedSlots.add(`${data.payload.date}_${data.payload.time}`);
-      responseBody.screen = "DETAILS";
-      responseBody.data = {
-        date: data.payload.date,
-        time: data.payload.time
-      };
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
-    // PING
+    // #1 PING
     if (data.action === "ping") {
+      console.log("🏓 PING");
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    // INIT
+    // #2 INIT - Load APPOINTMENT data
     if (data.action === "INIT") {
-      responseBody.data = { 
-        date_options: getDynamicDates(), 
-        time_options: getDynamicTimes()
+      console.log("🚀 INIT - Loading APPOINTMENT data");
+      responseBody.data = {
+        department: [
+          { id: "beauty", title: "Beauty & Personal Care" },
+          { id: "shopping", title: "Shopping & Groceries" },
+          { id: "clothing", title: "Clothing & Apparel" },
+          { id: "electronics", title: "Electronics" },
+          { id: "home", title: "Home Goods & Decor" }
+        ],
+        location: [
+          { id: "1", title: "Vadodara Branch 1" },
+          { id: "2", title: "Vadodara Branch 2" },
+          { id: "3", title: "Alkapuri Store" },
+          { id: "4", title: "Fatehgunj Outlet" }
+        ],
+        is_location_enabled: true,
+        date: getDynamicDates(),  // Your existing function
+        is_date_enabled: true,
+        time: getDynamicTimes(),  // Your existing function  
+        is_time_enabled: true
       };
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // SUMMARY Confirm
+    // #3 APPOINTMENT data_exchange (dropdown selections)
+    if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
+      console.log("📋 APPOINTMENT SELECTION:", data);
+      
+      // Refresh data on any selection
+      responseBody.data = {
+        department: [
+          { id: "beauty", title: "Beauty & Personal Care" },
+          { id: "shopping", title: "Shopping & Groceries" },
+          { id: "clothing", title: "Clothing & Apparel" },
+          { id: "electronics", title: "Electronics" },
+          { id: "home", title: "Home Goods & Decor" }
+        ],
+        location: [
+          { id: "1", title: "Vadodara Branch 1" },
+          { id: "2", title: "Vadodara Branch 2" },
+          { id: "3", title: "Alkapuri Store" },
+          { id: "4", title: "Fatehgunj Outlet" }
+        ],
+        is_location_enabled: true,
+        date: getDynamicDates(),
+        is_date_enabled: true,
+        time: getDynamicTimes(),
+        is_time_enabled: true
+      };
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // 🚨 #4 DETAILS Continue (data_exchange → SUMMARY)
+    if (data.action === "data_exchange" && data.screen === "DETAILS") {
+      console.log("🎉 DETAILS FORM SUBMITTED:", data);
+      
+      const bookingData = {
+        department: data.department || data.payload?.department,
+        location: data.location || data.payload?.location, 
+        date: data.date || data.payload?.date,
+        time: data.time || data.payload?.time,
+        name: data.name || data.payload?.name,
+        email: data.email || data.payload?.email,
+        phone: data.phone || data.payload?.phone,
+        more_details: data.more_details || data.payload?.more_details
+      };
+
+      // Format for SUMMARY display
+      const deptNames = {
+        beauty: "Beauty & Personal Care",
+        shopping: "Shopping & Groceries", 
+        clothing: "Clothing & Apparel",
+        electronics: "Electronics",
+        home: "Home Goods & Decor"
+      };
+      
+      const locationNames = {
+        "1": "Vadodara Branch 1",
+        "2": "Vadodara Branch 2", 
+        "3": "Alkapuri Store",
+        "4": "Fatehgunj Outlet"
+      };
+
+      responseBody = {
+        version: "3.0",
+        screen: "SUMMARY",
+        data: {
+          // Formatted display strings
+          appointment: `${deptNames[bookingData.department] || bookingData.department} at ${locationNames[bookingData.location] || bookingData.location}\n${bookingData.date} at ${bookingData.time}`,
+          details: `Name: ${bookingData.name}\nEmail: ${bookingData.email}\nPhone: ${bookingData.phone}${bookingData.more_details ? `\n\n${bookingData.more_details}` : ""}`,
+          
+          // Raw data for confirm
+          department: bookingData.department,
+          location: bookingData.location,
+          date: bookingData.date,
+          time: bookingData.time,
+          name: bookingData.name,
+          email: bookingData.email,
+          phone: bookingData.phone,
+          more_details: bookingData.more_details
+        }
+      };
+      
+      console.log("✅ SUMMARY DATA PREPARED:", responseBody.data);
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // #5 SUMMARY Confirm (data_exchange → TERMINATE)
     if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ BOOKING CONFIRMED!");
-      responseBody = { 
-        version: "3.0", 
+      console.log("✅ FINAL CONFIRMATION!");
+      
+      responseBody = {
+        version: "3.0",
         type: "TERMINATE",
         screen: "SUMMARY",
         data: {
-          ...data.data,
           extension_message_response: {
             params: {
               flow_token: data.flow_token,
               status: "success",
-              message: "Appointment booked successfully! 🎉"
+              message: "🎉 Appointment booked successfully!\n\nWe'll send you a confirmation soon."
             }
           }
         }
       };
+      console.log("🛑 FLOW TERMINATED");
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // APPOINTMENT date/time selection
-    if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
-      const date = data.date || data.data?.date;
-      const time = data.time || data.data?.time;
-      
-      if (date && !time) {
-        responseBody.data = {
-          date_options: getDynamicDates(),
-          time_options: getDynamicTimes()
-        };
-      }
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
+    // Fallback - stay on current screen
+    console.log("⚠️ FALLBACK - staying on screen");
     res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+
   } catch (error) {
     console.error("💥 ERROR:", error);
     res.status(421).send("Error");
