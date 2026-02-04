@@ -112,16 +112,18 @@ app.post("/flow", (req, res) => {
     // 3️⃣ Date selected - Load times
     // 3️⃣ Date/Time BOTH selected - Navigate to DETAILS (🚨 MAIN FIX)
     else if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
-      let selectedDate = data.date || (data.data && data.data.date);
-      let selectedTime = data.time || (data.data && data.time);
+      // ✅ CORRECT WAY: Check both levels
+      const selectedDate = data.date || data.data?.date;
+      const selectedTime = data.time || data.data?.time;  // 🚨 data.data.time!
       
-      console.log("📅 Selected Date:", selectedDate);
-      console.log("🕒 Selected Time:", selectedTime);
+      console.log("📅 Date:", selectedDate);
+      console.log("🕒 Time:", selectedTime);
+      console.log("🔍 Full data:", JSON.stringify(data.data));
     
-      // ✅ BOTH Date + Time selected = Go to DETAILS
+      // ✅ BOTH Selected = Go DETAILS
       if (selectedDate && selectedTime) {
+        console.log("✅ Date+Time VALIDATED → DETAILS SCREEN");
         bookedSlots.add(`${selectedDate}_${selectedTime}`);
-        console.log("✅ Date+Time VALID → Navigating to DETAILS");
         
         responseBody.screen = "DETAILS";
         responseBody.data = {
@@ -191,12 +193,14 @@ app.post("/flow", (req, res) => {
       };
     }
     else {
-        responseBody.data = {
-          date_options: getDynamicDates(),
-          time_options: getDynamicTimes()
-        };
-      }
-    }
+    console.log("⏳ Partial selection → Stay APPOINTMENT");
+    responseBody.screen = "APPOINTMENT";
+    responseBody.data = {
+      date_options: getDynamicDates(),
+      time_options: getDynamicTimes()
+    };
+  }
+}
             
     res.setHeader("Content-Type", "text/plain");
     return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
