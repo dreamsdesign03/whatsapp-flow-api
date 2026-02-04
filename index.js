@@ -81,139 +81,81 @@ let bookedSlots = new Set();
 
 app.post("/flow", (req, res) => {
   try {
-    if (!req.body.encrypted_flow_data) {
-      return res.status(200).send("Active");
-    }
+    if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
     const { data, aesKey, iv } = decryptRequest(req.body);
+    console.log("📥 Action:", data.action);
 
-    console.log("📥 Action Received:", data.action);
-    console.log("📥 Full Decrypted Data:", JSON.stringify(data, null, 2));
+    let responseBody = { version: "3.0", screen: "APPOINTMENT", data: {} };
 
-    // 1️⃣ Ping
+    // 🚨 FIX #1: NAVIGATE - SABSE UPAR!
+    if (data.action === "navigate") {
+      console.log("🔄 NAVIGATE:", JSON.stringify(data.next));
+      if (data.next?.name === "SUMMARY") {
+        const formData = data.payload || data.data || data;
+        console.log("✅ FORM DATA:", formData);
+        
+        responseBody.screen = "SUMMARY";
+        responseBody.data = {
+          name: formData.name || "",
+          phone: formData.phone || "",
+          date: formData.date || "",
+          time: formData.time || ""
+        };
+        console.log("📤 SUMMARY SENT:", responseBody.data);
+      }
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    // Ping
     if (data.action === "ping") {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    let responseBody = {
-      version: "3.0",
-      screen: data.screen || "APPOINTMENT",
-      data: {}
-    };
-
-    // 2️⃣ INIT - First screen load
+    // INIT
     if (data.action === "INIT") {
-      responseBody.data = {
-        date_options: getDynamicDates(),
-        time_options: []
-      };
+      responseBody.data = { date_options: getDynamicDates(), time_options: [] };
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // 3️⃣ Date selected - Load times
-    // 3️⃣ Date/Time BOTH selected - Navigate to DETAILS (🚨 MAIN FIX)
-    else if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
-      // ✅ CORRECT WAY: Check both levels
-      const selectedDate = data.date || data.data?.date;
-      const selectedTime = data.time || data.data?.time;  // 🚨 data.data.time!
+    // APPOINTMENT data_exchange ONLY
+    if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
+      const date = data.date || data.data?.date;
+      const time = data.time || data.data?.time;
       
-      console.log("📅 Date:", selectedDate);
-      console.log("🕒 Time:", selectedTime);
-      console.log("🔍 Full data:", JSON.stringify(data.data));
-    
-      // ✅ BOTH Selected = Go DETAILS
-      if (selectedDate && selectedTime) {
-        console.log("✅ Date+Time VALIDATED → DETAILS SCREEN");
-        bookedSlots.add(`${selectedDate}_${selectedTime}`);
-        
+      console.log("📅", date, "🕒", time);
+      
+      if (date && time) {
+        console.log("✅ → DETAILS");
+        bookedSlots.add(`${date}_${time}`);
         responseBody.screen = "DETAILS";
-        responseBody.data = {
-          date: selectedDate,
-          time: selectedTime
-        };
-      } 
-  // Only date = Load times (existing logic)
-          else if (selectedDate && !selectedTime) {
-            console.log("⏳ Only Date → Loading Times");
-            const availableTimes = getDynamicTimes().filter(
-              (s) => !bookedSlots.has(`${selectedDate}_${s.id}`)
-            );
-            responseBody.screen = "APPOINTMENT";
-            responseBody.data = {
-              date_options: getDynamicDates(),
-              time_options: availableTimes
-            };
-          }
-        else if (data.action === "time_selected") {
-          const selectedDate = data.date;
-          const selectedTime = data.time;
-          
-          console.log("🕒 TIME SELECTED:", selectedTime);
-          console.log("📅 Date:", selectedDate);
-          
-          // Mark slot booked + Go to DETAILS
-          bookedSlots.add(`${selectedDate}_${selectedTime}`);
-          responseBody.screen = "DETAILS";
-          responseBody.data = {
-            date: selectedDate,
-            time: selectedTime
-          };
-        }
-        // 🚨 MAIN FIX: DETAILS form → SUMMARY navigation
-        else if (data.action === "navigate") {
-          console.log("🔄 NAVIGATION DETECTED:", data.next?.name);
-          
-          if (data.next?.name === "SUMMARY") {
-            const detailsData = data.payload || data.data || data;
-            console.log("✅ DETAILS DATA RECEIVED:", detailsData);
-            
-            responseBody.screen = "SUMMARY";
-            responseBody.data = {
-              name: detailsData.name || detailsData.form?.name || "",
-              phone: detailsData.phone || detailsData.form?.phone || "",
-              date: detailsData.date || detailsData.form?.date || "",
-              time: detailsData.time || detailsData.form?.time || ""
-            };
-            console.log("📤 SUMMARY DATA SENT:", responseBody.data);
-          }
-        }
-
-        // 5️⃣ Final booking confirmation
-        else if (data.action === "complete_booking") {
-          const bookingData = data.data || data;
-          bookedSlots.add(`${bookingData.date}_${bookingData.time}`);
-          console.log("✅ FINAL Booking Confirmed:", bookingData);
-    
-          responseBody = {
-            version: "3.0",
-            type: "TERMINATE",
-            screen: "SUMMARY",
-            data: {
-              extension_message_response: {
-                params: {
-                  flow_token: data.flow_token,
-                  status: "success"
-                }
-              }
-            }
-          };
-        }
-        else {
-        console.log("⏳ Partial selection → Stay APPOINTMENT");
-        responseBody.screen = "APPOINTMENT";
-        responseBody.data = {
-          date_options: getDynamicDates(),
-          time_options: getDynamicTimes()
-        };
+        responseBody.data = { date, time };
+      } else if (date) {
+        console.log("⏳ Times");
+        const times = getDynamicTimes().filter(t => !bookedSlots.has(`${date}_${t.id}`));
+        responseBody.data = { date_options: getDynamicDates(), time_options: times };
       }
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
-            
-    res.setHeader("Content-Type", "text/plain");
-    return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
+    // Complete booking
+    if (data.action === "complete_booking") {
+      console.log("✅ BOOKED");
+      responseBody = { 
+        version: "3.0", 
+        type: "TERMINATE", 
+        screen: "SUMMARY", 
+        data: { extension_message_response: { params: { flow_token: data.flow_token, status: "success" } } } 
+      };
+      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
+    }
+
+    res.status(200).send(encryptResponse(responseBody, aesKey, iv));
   } catch (error) {
-    console.error("❌ ERROR:", error);
-    return res.status(421).send("Error");
+    console.error("❌", error);
+    res.status(421).send("Error");
   }
 });
+
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
