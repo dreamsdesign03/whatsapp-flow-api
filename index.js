@@ -84,7 +84,6 @@ app.post("/flow", (req, res) => {
     if (!req.body.encrypted_flow_data) return res.status(200).send("Active");
 
     const { data, aesKey, iv } = decryptRequest(req.body);
-    console.log("🔍 RAW DATA:", JSON.stringify(data, null, 2));
     console.log("📱 Screen:", data.screen || "NONE");
     console.log("⚡ Action:", data.action);
 
@@ -92,42 +91,15 @@ app.post("/flow", (req, res) => {
 
     // #1 PING
     if (data.action === "ping") {
-      console.log("🏓 PING");
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, iv));
     }
 
-    // #2 INIT - Load APPOINTMENT data
-    if (data.action === "INIT") {
-      console.log("🚀 INIT - Loading APPOINTMENT data");
-      responseBody.data = {
-        department: [
-          { id: "beauty", title: "Beauty & Personal Care" },
-          { id: "shopping", title: "Shopping & Groceries" },
-          { id: "clothing", title: "Clothing & Apparel" },
-          { id: "electronics", title: "Electronics" },
-          { id: "home", title: "Home Goods & Decor" }
-        ],
-        location: [
-          { id: "1", title: "Vadodara Branch 1" },
-          { id: "2", title: "Vadodara Branch 2" },
-          { id: "3", title: "Alkapuri Store" },
-          { id: "4", title: "Fatehgunj Outlet" }
-        ],
-        is_location_enabled: true,
-        date: getDynamicDates(),  // Your existing function
-        is_date_enabled: true,
-        time: getDynamicTimes(),  // Your existing function  
-        is_time_enabled: true
-      };
-      return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
-    }
-
-    // #3 APPOINTMENT data_exchange (dropdown selections)
-    if (data.action === "data_exchange" && data.screen === "APPOINTMENT") {
-      console.log("📋 APPOINTMENT SELECTION:", data);
+    // #2 INIT & APPOINTMENT - ALWAYS SEND FULL DATA
+    if (data.action === "INIT" || (data.action === "data_exchange" && data.screen === "APPOINTMENT")) {
+      console.log("🚀 LOADING APPOINTMENT DATA");
       
-      // Refresh data on any selection
       responseBody.data = {
+        // ✅ Department dropdown data
         department: [
           { id: "beauty", title: "Beauty & Personal Care" },
           { id: "shopping", title: "Shopping & Groceries" },
@@ -135,6 +107,7 @@ app.post("/flow", (req, res) => {
           { id: "electronics", title: "Electronics" },
           { id: "home", title: "Home Goods & Decor" }
         ],
+        // ✅ Location dropdown data  
         location: [
           { id: "1", title: "Vadodara Branch 1" },
           { id: "2", title: "Vadodara Branch 2" },
@@ -142,21 +115,25 @@ app.post("/flow", (req, res) => {
           { id: "4", title: "Fatehgunj Outlet" }
         ],
         is_location_enabled: true,
+        // ✅ Date dropdown data (your dynamic function)
         date: getDynamicDates(),
         is_date_enabled: true,
+        // ✅ Time dropdown data (your dynamic function)
         time: getDynamicTimes(),
         is_time_enabled: true
       };
+      
+      console.log("✅ DROPDOWN DATA SENT:", Object.keys(responseBody.data));
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // 🚨 #4 DETAILS Continue (data_exchange → SUMMARY)
+    // #3 DETAILS → SUMMARY (data_exchange from DETAILS Continue button)
     if (data.action === "data_exchange" && data.screen === "DETAILS") {
-      console.log("🎉 DETAILS FORM SUBMITTED:", data);
+      console.log("🎉 DETAILS SUBMITTED:", data);
       
       const bookingData = {
         department: data.department || data.payload?.department,
-        location: data.location || data.payload?.location, 
+        location: data.location || data.payload?.location,
         date: data.date || data.payload?.date,
         time: data.time || data.payload?.time,
         name: data.name || data.payload?.name,
@@ -165,31 +142,20 @@ app.post("/flow", (req, res) => {
         more_details: data.more_details || data.payload?.more_details
       };
 
-      // Format for SUMMARY display
+      // Location/department names for display
       const deptNames = {
-        beauty: "Beauty & Personal Care",
-        shopping: "Shopping & Groceries", 
-        clothing: "Clothing & Apparel",
-        electronics: "Electronics",
-        home: "Home Goods & Decor"
+        beauty: "Beauty & Personal Care", shopping: "Shopping & Groceries",
+        clothing: "Clothing & Apparel", electronics: "Electronics", home: "Home Goods"
       };
-      
-      const locationNames = {
-        "1": "Vadodara Branch 1",
-        "2": "Vadodara Branch 2", 
-        "3": "Alkapuri Store",
-        "4": "Fatehgunj Outlet"
-      };
+      const locNames = { "1": "Vadodara Branch 1", "2": "Vadodara Branch 2", 
+                       "3": "Alkapuri Store", "4": "Fatehgunj Outlet" };
 
       responseBody = {
         version: "3.0",
         screen: "SUMMARY",
         data: {
-          // Formatted display strings
-          appointment: `${deptNames[bookingData.department] || bookingData.department} at ${locationNames[bookingData.location] || bookingData.location}\n${bookingData.date} at ${bookingData.time}`,
+          appointment: `${deptNames[bookingData.department] || bookingData.department} Department\n${locNames[bookingData.location] || bookingData.location}\n${bookingData.date} at ${bookingData.time}`,
           details: `Name: ${bookingData.name}\nEmail: ${bookingData.email}\nPhone: ${bookingData.phone}${bookingData.more_details ? `\n\n${bookingData.more_details}` : ""}`,
-          
-          // Raw data for confirm
           department: bookingData.department,
           location: bookingData.location,
           date: bookingData.date,
@@ -201,14 +167,13 @@ app.post("/flow", (req, res) => {
         }
       };
       
-      console.log("✅ SUMMARY DATA PREPARED:", responseBody.data);
+      console.log("✅ SUMMARY PREPARED:", responseBody.data.appointment);
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // #5 SUMMARY Confirm (data_exchange → TERMINATE)
+    // #4 SUMMARY Confirm → TERMINATE
     if (data.action === "data_exchange" && data.screen === "SUMMARY") {
-      console.log("✅ FINAL CONFIRMATION!");
-      
+      console.log("✅ BOOKING CONFIRMED!");
       responseBody = {
         version: "3.0",
         type: "TERMINATE",
@@ -218,17 +183,15 @@ app.post("/flow", (req, res) => {
             params: {
               flow_token: data.flow_token,
               status: "success",
-              message: "🎉 Appointment booked successfully!\n\nWe'll send you a confirmation soon."
+              message: `🎉 Appointment confirmed!\n\n${data.name || "Customer"} - ${data.date} ${data.time}`
             }
           }
         }
       };
-      console.log("🛑 FLOW TERMINATED");
       return res.status(200).send(encryptResponse(responseBody, aesKey, iv));
     }
 
-    // Fallback - stay on current screen
-    console.log("⚠️ FALLBACK - staying on screen");
+    console.log("⚠️ FALLBACK");
     res.status(200).send(encryptResponse(responseBody, aesKey, iv));
 
   } catch (error) {
